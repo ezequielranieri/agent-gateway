@@ -1,0 +1,46 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+
+# Dependencies
+vendor/
+
+# Build output
+*.out
+*.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Docker
+docker-compose.override.yml
+
+# Database
+*.db
+*.sqlite
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Generated
+internal/adapter/postgres/sqlc/*.go
+!internal/adapter/postgres/sqlc/querier.go
+
+# Engram (local only)
+.engram/
