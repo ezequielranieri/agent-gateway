@@ -283,11 +283,11 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 ## 5. Reference Roadmap (high level)
 
-- [x] **Phase 0** — Foundation: domain entities, RLS schema, auth primitives, middleware chain
-- [x] **Phase 1** — Rate limiting: Redis token bucket (reqs/tokens/tools), per tenant/user/role
-- [x] **Phase 2** — Audit log: append-only + hash chaining + VerifyChain
-- [x] **Phase 3** — HITL: state machine + SSE + re-validation on approve
-- [x] **Phase 4** — Guardrails: domain interface + LocalGuardrail (regex/wordlist/PII)
+- [ ] **Phase 0** — Foundation: domain entities, RLS schema, auth primitives, middleware chain
+- [ ] **Phase 1** — Rate limiting: Redis token bucket (reqs/tokens/tools), per tenant/user/role
+- [ ] **Phase 2** — Audit log: append-only + hash chaining + VerifyChain
+- [ ] **Phase 3** — HITL: state machine + SSE + re-validation on approve
+- [ ] **Phase 4** — Guardrails: domain interface + LocalGuardrail (regex/wordlist/PII)
 - [ ] **Phase 5** — Model routing: provider port + fallback + pricing abstraction
 - [ ] **Phase 6** — Tool sandbox: `ToolExecutor` interface + wazero WASM adapter
 - [ ] **Phase 7** — External guardrail classifier adapter

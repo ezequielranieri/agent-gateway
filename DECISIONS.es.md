@@ -283,11 +283,11 @@ Leyenda de estado: `Accepted` = resuelto; `Open` = propuesta, no implementar.
 
 ## 5. Roadmap de Referencia (alto nivel)
 
-- [x] **Fase 0** — Fundación: entidades de dominio, schema RLS, primitivas auth, cadena middleware
-- [x] **Fase 1** — Rate limiting: Redis token bucket (reqs/tokens/tools), por tenant/user/role
-- [x] **Fase 2** — Audit log: append-only + hash chaining + VerifyChain
-- [x] **Fase 3** — HITL: state machine + SSE + re-validación al aprobar
-- [x] **Fase 4** — Guardrails: interfaz dominio + LocalGuardrail (regex/wordlist/PII)
+- [ ] **Fase 0** — Fundación: entidades de dominio, schema RLS, primitivas auth, cadena middleware
+- [ ] **Fase 1** — Rate limiting: Redis token bucket (reqs/tokens/tools), por tenant/user/role
+- [ ] **Fase 2** — Audit log: append-only + hash chaining + VerifyChain
+- [ ] **Fase 3** — HITL: state machine + SSE + re-validación al aprobar
+- [ ] **Fase 4** — Guardrails: interfaz dominio + LocalGuardrail (regex/wordlist/PII)
 - [ ] **Fase 5** — Model routing: provider port + fallback + abstracción pricing
 - [ ] **Fase 6** — Tool sandbox: interfaz `ToolExecutor` + adapter wazero WASM
 - [ ] **Fase 7** — Adapter clasificador guardrail externo
