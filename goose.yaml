@@ -1,0 +1,11 @@
+# Goose Migration Configuration
+version: 3
+
+migrations:
+  dir: migrations
+  table: goose_db_version
+
+database:
+  driver: postgres
+  # DSN is passed via environment variable or -dbstring flag
+  # goose -dir migrations postgres "$DATABASE_URL" up
