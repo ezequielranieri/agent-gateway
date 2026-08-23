@@ -1,10 +1,11 @@
 -- 0009_refresh_tokens.up.sql
 -- Create refresh_tokens table (GLOBAL, NO RLS per AD-009)
 -- Refresh tokens are global to support cross-tenant operations and family tracking
+-- No FK to users (composite PK) - referential integrity handled in application layer
 
 CREATE TABLE IF NOT EXISTS public.refresh_tokens (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id         uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    user_id         uuid NOT NULL,
     tenant_id       uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     token_hash      bytea NOT NULL, -- SHA-256 hash of the raw refresh token
     family_id       uuid NOT NULL, -- Groups related tokens for rotation/reuse detection
@@ -21,9 +22,8 @@ CREATE TABLE IF NOT EXISTS public.refresh_tokens (
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON public.refresh_tokens (token_hash);
 -- Index for family lookups (used for reuse detection)
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON public.refresh_tokens (family_id);
--- Index for user's active tokens
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active ON public.refresh_tokens (user_id, revoked, expires_at)
-    WHERE revoked = false AND expires_at > now();
+-- Index for user's active tokens (partial index - cannot use now() in predicate)
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active ON public.refresh_tokens (user_id, revoked, expires_at);
 -- Index for tenant's tokens (admin queries)
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_tenant ON public.refresh_tokens (tenant_id, user_id);
 

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -26,15 +24,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-
-  migrate:
-    image: ghcr.io/pressly/goose:v3.24.0
-    command: ["postgres", "postgres://gateway:gateway@postgres:5432/agent_gateway?sslmode=disable", "up"]
-    volumes:
-      - ./migrations:/migrations
-    depends_on:
-      postgres:
-        condition: service_healthy
 
 volumes:
   pgdata:
