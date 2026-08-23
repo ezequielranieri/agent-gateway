@@ -39,4 +39,7 @@ var (
 
 	// ErrInvalidToken indicates a token is malformed or invalid
 	ErrInvalidToken = errors.New("invalid token")
+
+	// ErrInvalidCredentials indicates invalid login credentials
+	ErrInvalidCredentials = errors.New("invalid credentials")
 )

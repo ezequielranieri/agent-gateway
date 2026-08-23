@@ -17,6 +17,7 @@ type TenantConfig struct {
 }
 
 // NewTenant creates a new tenant resolution middleware
+// It validates the tenant exists and is active, then sets the tenant GUC for RLS
 func NewTenant(cfg TenantConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,23 +65,4 @@ func NewTenant(cfg TenantConfig) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
-}
-
-// WithTenant executes a function within a tenant context
-// This should be used by repositories for all tenanted queries
-func WithTenant(ctx context.Context, pool *pgxpool.Pool, tenantID domain.UUID, fn func(context.Context) error) error {
-	// Set tenant GUC
-	_, err := pool.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, tenantID.String())
-	if err != nil {
-		return err
-	}
-
-	// Run the function
-	return fn(ctx)
-}
-
-// ClearTenant clears the tenant GUC (for cleanup)
-func ClearTenant(ctx context.Context, pool *pgxpool.Pool) error {
-	_, err := pool.Exec(ctx, `SELECT set_config('app.current_tenant', '', true)`)
-	return err
 }

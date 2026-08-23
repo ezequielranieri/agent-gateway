@@ -2,10 +2,10 @@ version: "2"
 sql:
   - engine: "postgresql"
     schema: "migrations"
-    queries: "internal/adapter/postgres/sqlc"
+    queries: "internal/adapter/postgres/queries"
     gen:
       go:
-        package: "postgres"
+        package: "postgressqlc"
         out: "internal/adapter/postgres/sqlc"
         sql_package: "pgx/v5"
         emit_json_tags: true
@@ -18,4 +18,4 @@ sql:
           - db_type: "timestamptz"
             go_type: "time.Time"
           - db_type: "jsonb"
-            go_type: "json.RawMessage"
+            go_type: "encoding/json.RawMessage"
