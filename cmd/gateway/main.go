@@ -16,6 +16,7 @@ import (
 
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
+	redisadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
 	"github.com/ezequielranieri/agent-gateway/internal/api/handlers"
 	"github.com/ezequielranieri/agent-gateway/internal/config"
@@ -59,6 +60,7 @@ func main() {
 	// Initialize repositories
 	userRepo := postgres.NewUserRepository(dbPool)
 	refreshRepo := postgres.NewRefreshTokenRepository(dbPool)
+	quotaRepo := postgres.NewQuotaRepository(dbPool)
 
 	// Initialize JWT adapter
 	// Generate a random signing key if not provided
@@ -79,6 +81,9 @@ func main() {
 	// Initialize auth handlers
 	authHandlers := handlers.NewAuthHandlers(authUC, superAdminLoginUC, logger)
 
+	// Initialize chat handlers
+	chatHandlers := handlers.NewChatHandlers(logger)
+
 	// Initialize middleware with real JWT service
 	authMW := middleware.NewAuth(middleware.AuthConfig{
 		JWTService: jwtService,
@@ -90,14 +95,15 @@ func main() {
 		Logger: logger,
 	})
 
-	// Rate limiter will be implemented in next phase
-	// For now, use a no-op
+	// Initialize Redis rate limiter
+	redisRateLimiter := redisadapter.NewRedisRateLimiter(redisClient, logger, cfg.RateLimit.FailOpen)
+	redisQuotaResolver := redisadapter.NewRedisQuotaResolver(quotaRepo, logger)
+
 	rateLimitMW := middleware.NewRateLimit(middleware.RateLimitConfig{
-		Limiter:      &noopRateLimiter{},
-		DefaultLimit: cfg.RateLimit.DefaultTenantRequestsPerMin,
-		Window:       time.Minute,
-		FailOpen:     cfg.RateLimit.FailOpen,
-		Logger:       logger,
+		Limiter:       redisRateLimiter,
+		QuotaResolver: redisQuotaResolver,
+		FailOpen:      cfg.RateLimit.FailOpen,
+		Logger:        logger,
 	})
 
 	auditMW := middleware.NewAudit(middleware.AuditConfig{
@@ -117,15 +123,16 @@ func main() {
 
 	// Create router with auth handlers
 	router := api.NewRouter(api.RouterConfig{
-		Config:         cfg,
-		Logger:         logger,
-		AuthMW:         authMW,
-		TenantMW:       tenantMW,
-		RateLimitMW:    rateLimitMW,
-		AuditMW:        auditMW,
-		GuardrailsMW:   guardrailsMW,
-		HITLMW:         hitlMW,
-		AuthHandlers:   authHandlers,
+		Config:        cfg,
+		Logger:        logger,
+		AuthMW:        authMW,
+		TenantMW:      tenantMW,
+		RateLimitMW:   rateLimitMW,
+		AuditMW:       auditMW,
+		GuardrailsMW:  guardrailsMW,
+		HITLMW:        hitlMW,
+		AuthHandlers:  authHandlers,
+		ChatHandlers:  chatHandlers,
 	})
 
 	// Create HTTP server
@@ -216,16 +223,6 @@ func initRedis(cfg config.RedisConfig, logger zerolog.Logger) (*redis.Client, er
 }
 
 // No-op implementations for Phase 0a (to be replaced in later phases)
-
-type noopRateLimiter struct{}
-
-func (n *noopRateLimiter) Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, int, int, time.Duration, error) {
-	return true, limit, limit, 0, nil
-}
-
-func (n *noopRateLimiter) AllowN(ctx context.Context, key string, nReq int, limit int, window time.Duration) (bool, int, int, time.Duration, error) {
-	return true, limit, limit, 0, nil
-}
 
 type noopAuditStore struct{}
 

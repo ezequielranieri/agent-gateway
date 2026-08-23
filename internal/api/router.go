@@ -22,6 +22,7 @@ type RouterConfig struct {
 	GuardrailsMW  func(http.Handler) http.Handler
 	HITLMW        func(http.Handler) http.Handler
 	AuthHandlers  *handlers.AuthHandlers
+	ChatHandlers  *handlers.ChatHandlers
 }
 
 // NewRouter creates a new chi router with all middleware and routes
@@ -110,7 +111,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			})
 
 			// Chat/Completions route (gateway core)
-			r.Post("/chat/completions", chatCompletionsHandler)
+			r.Post("/chat/completions", cfg.ChatHandlers.ChatCompletions)
 		})
 	})
 
@@ -301,11 +302,4 @@ func streamReviewHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	_, _ = w.Write([]byte("data: {\"status\":\"PENDING\"}\n\n"))
-}
-
-// Chat completions handler (placeholder)
-func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message":"chat completions placeholder"}`))
 }
