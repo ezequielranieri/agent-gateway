@@ -123,6 +123,59 @@ func TestAuditEvent_ChainInput_WithPayload(t *testing.T) {
 	assert.Contains(t, input, `{"key":"value","number":42}`)
 }
 
+func TestAuditEvent_ComputeChainHash(t *testing.T) {
+	tenantID := NewUUID()
+	userID := NewUUID()
+	event := &AuditEvent{
+		ID:          NewUUID(),
+		TenantID:    tenantID,
+		Seq:         1,
+		PrevHash:    "0000000000000000000000000000000000000000000000000000000000000000",
+		ActorUserID: &userID,
+		Action:      "test_action",
+		EntityType:  "test_entity",
+		Payload:     []byte(`{"data":"test"}`),
+		Severity:    AuditSeverityInfo,
+		CreatedAt:   time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+	}
+
+	hash := event.ComputeChainHash()
+	assert.NotEmpty(t, hash)
+	assert.Len(t, hash, 64) // SHA256 hex string is 64 chars
+}
+
+func TestAuditEvent_VerifyChainInput(t *testing.T) {
+	tenantID := NewUUID()
+	userID := NewUUID()
+	event := &AuditEvent{
+		ID:          NewUUID(),
+		TenantID:    tenantID,
+		Seq:         1,
+		PrevHash:    "0000000000000000000000000000000000000000000000000000000000000000",
+		ActorUserID: &userID,
+		Action:      "test_action",
+		EntityType:  "test_entity",
+		Payload:     []byte(`{"data":"test"}`),
+		Severity:    AuditSeverityInfo,
+		CreatedAt:   time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+	}
+
+	// Compute and set the chain hash
+	event.ChainHash = event.ComputeChainHash()
+
+	// Verify should pass
+	assert.True(t, event.VerifyChainInput())
+
+	// Tamper with payload
+	event.Payload = []byte(`{"data":"tampered"}`)
+	assert.False(t, event.VerifyChainInput())
+
+	// Tamper with seq
+	event.Payload = []byte(`{"data":"test"}`)
+	event.Seq = 2
+	assert.False(t, event.VerifyChainInput())
+}
+
 func TestReviewRequest_IsPending(t *testing.T) {
 	pending := &ReviewRequest{
 		ID:        NewUUID(),
