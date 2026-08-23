@@ -52,6 +52,34 @@ ratelimit:
 # Guardrails configuration
 guardrails:
   enabled: true
+  pii_patterns:
+    email: true
+    credit_card: true
+    ssn: true
+  injection_patterns:
+    - "ignore previous"
+    - "system prompt"
+    - "you are now"
+    - "DAN"
+    - "jailbreak"
+    - "roleplay"
+    - "forget everything"
+    - "new instructions"
+    - "ignore all"
+    - "disregard"
+    - "override"
+    - "pretend to be"
+    - "act as"
+    - "you must"
+    - "you will"
+    - "do anything now"
+  wordlist:
+    enabled: true
+    custom_file: ""  # optional path to custom wordlist
+  length_limits:
+    max_input_chars: 100000
+    max_output_chars: 200000
+  # Custom rules (legacy format, kept for backwards compatibility)
   rules:
     - name: "pii_email"
       type: "regex"
