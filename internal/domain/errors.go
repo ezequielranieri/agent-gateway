@@ -42,4 +42,7 @@ var (
 
 	// ErrInvalidCredentials indicates invalid login credentials
 	ErrInvalidCredentials = errors.New("invalid credentials")
+
+	// ErrReviewNotPending indicates the review is not in PENDING state
+	ErrReviewNotPending = errors.New("review not pending")
 )

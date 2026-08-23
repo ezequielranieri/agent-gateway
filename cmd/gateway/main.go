@@ -23,6 +23,7 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/auth"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/hitl"
 )
 
 func main() {
@@ -62,6 +63,7 @@ func main() {
 	refreshRepo := postgres.NewRefreshTokenRepository(dbPool)
 	quotaRepo := postgres.NewQuotaRepository(dbPool)
 	auditRepo := postgres.NewAuditRepository(dbPool)
+	reviewRepo := postgres.NewReviewRepository(dbPool)
 
 	// Initialize JWT adapter
 	// Generate a random signing key if not provided
@@ -79,11 +81,22 @@ func main() {
 	authUC := auth.NewAuthUseCase(userRepo, refreshRepo, jwtService)
 	superAdminLoginUC := auth.NewSuperAdminLoginUseCase(dbPool, jwtService)
 
+	// Initialize HITL use case
+	hitlUC := hitl.NewHITLUseCase(hitl.HITLConfig{
+		ReviewRepo:   reviewRepo,
+		AuditRepo:    auditRepo,
+		DefaultTTL:   cfg.HITL.DefaultTTL,
+		Logger:       logger,
+	})
+
 	// Initialize auth handlers
 	authHandlers := handlers.NewAuthHandlers(authUC, superAdminLoginUC, logger)
 
 	// Initialize admin audit handlers
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
+
+	// Initialize review handlers
+	reviewHandlers := handlers.NewReviewHandlers(hitlUC, reviewRepo, string(signingKey), logger)
 
 	// Initialize chat handlers
 	chatHandlers := handlers.NewChatHandlers(logger)
@@ -121,7 +134,6 @@ func main() {
 	})
 
 	hitlMW := middleware.NewHITL(middleware.HITLConfig{
-		Store:  &noopReviewStore{},
 		Logger: logger,
 	})
 
@@ -136,6 +148,7 @@ func main() {
 		GuardrailsMW:        guardrailsMW,
 		HITLMW:              hitlMW,
 		AuthHandlers:        authHandlers,
+		ReviewHandlers:      reviewHandlers,
 		ChatHandlers:        chatHandlers,
 		AdminAuditHandlers:  adminAuditHandlers,
 	})

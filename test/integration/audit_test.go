@@ -13,24 +13,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	pgmodule "github.com/testcontainers/testcontainers-go/modules/postgres"
-	redisModule "github.com/testcontainers/testcontainers-go/modules/redis"
-	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
 	pgadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
-	redisadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
-	"github.com/ezequielranieri/agent-gateway/internal/api"
-	"github.com/ezequielranieri/agent-gateway/internal/api/handlers"
-	"github.com/ezequielranieri/agent-gateway/internal/config"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
-	"github.com/ezequielranieri/agent-gateway/internal/middleware"
-	"github.com/ezequielranieri/agent-gateway/internal/usecase/auth"
 )
 
 // TestAuditIntegration tests the audit log implementation
@@ -40,150 +28,39 @@ func TestAuditIntegration(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	ctx := context.Background()
-
-	// Start PostgreSQL container
-	pgContainer, err := pgmodule.Run(ctx,
-		"postgres:16-alpine",
-		pgmodule.WithDatabase("agent_gateway"),
-		pgmodule.WithUsername("postgres"),
-		pgmodule.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections")),
-	)
-	require.NoError(t, err)
-	defer func() { _ = pgContainer.Terminate(ctx) }()
-
-	pgDSN, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	// Start Redis container
-	redisContainer, err := redisModule.Run(ctx, "redis:7-alpine",
-		testcontainers.WithWaitStrategy(wait.ForLog("Ready to accept connections")),
-	)
-	require.NoError(t, err)
-	defer func() { _ = redisContainer.Terminate(ctx) }()
-
-	redisAddr, err := redisContainer.ConnectionString(ctx)
-	require.NoError(t, err)
-
-	// Run migrations
-	dbPool, err := pgxpool.New(ctx, pgDSN)
-	require.NoError(t, err)
-	defer dbPool.Close()
-
-	err = applyMigrations(ctx, pgDSN)
-	require.NoError(t, err)
-
-	// Initialize Redis client
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-	})
-	defer redisClient.Close()
-
-	// Wait for Redis to be ready
-	require.NoError(t, redisClient.Ping(ctx).Err())
+	// Setup test containers
+	tc := SetupTestContainers(t)
+	defer tc.Teardown(t)
 
 	// Create logger
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: zerolog.NewTestWriter(t)}).
 		Level(zerolog.DebugLevel).
 		With().Str("test", "audit").Logger()
 
-	// Initialize repositories
-	userRepo := pgadapter.NewUserRepository(dbPool)
-	refreshRepo := pgadapter.NewRefreshTokenRepository(dbPool)
-	quotaRepo := pgadapter.NewQuotaRepository(dbPool)
-	auditRepo := pgadapter.NewAuditRepository(dbPool)
+	// Create test router
+	router, token, tenantID, userID, _ := CreateTestRouter(t, tc, logger)
 
-	// Create test tenant and user
-	tenantID := domain.NewUUID()
-	userID := domain.NewUUID()
-	roleID := domain.NewUUID()
-
-	err = setupTestData(ctx, dbPool, tenantID, userID, roleID)
-	require.NoError(t, err)
-
-	// Initialize JWT
-	signingKey := []byte("test-secret-key-32-bytes-long!!")
-	keyStore := jwt.NewKeyStore("v1", signingKey, map[string][]byte{"v1": signingKey})
-	jwtService := jwt.NewAuthService(keyStore, "agent-gateway", "agent-gateway")
-
-	// Initialize auth use case
-	authUC := auth.NewAuthUseCase(userRepo, refreshRepo, jwtService)
-
-	// Initialize handlers
-	authHandlers := handlers.NewAuthHandlers(authUC, nil, logger)
-	chatHandlers := handlers.NewChatHandlers(logger)
-	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
-
-	// Initialize middleware
-	authMW := middleware.NewAuth(middleware.AuthConfig{
-		JWTService: jwtService,
-		Logger:     logger,
-	})
-
-	tenantMW := middleware.NewTenant(middleware.TenantConfig{
-		Pool:   dbPool,
-		Logger: logger,
-	})
-
-	// Initialize Redis rate limiter
-	redisRateLimiter := redisadapter.NewRedisRateLimiter(redisClient, logger, true)
-	redisQuotaResolver := redisadapter.NewRedisQuotaResolver(quotaRepo, logger)
-
-	rateLimitMW := middleware.NewRateLimit(middleware.RateLimitConfig{
-		Limiter:       redisRateLimiter,
-		QuotaResolver: redisQuotaResolver,
-		FailOpen:      true,
-		Logger:        logger,
-	})
-
-	auditMW := middleware.NewAudit(middleware.AuditConfig{
-		Store:  auditRepo,
-		Logger: logger,
-	})
-
-	// Create router
-	router := api.NewRouter(api.RouterConfig{
-		Config:              &config.Config{RateLimit: config.RateLimitConfig{FailOpen: true}},
-		Logger:              logger,
-		AuthMW:              authMW,
-		TenantMW:            tenantMW,
-		RateLimitMW:         rateLimitMW,
-		AuditMW:             auditMW,
-		GuardrailsMW:        middleware.NewGuardrails(middleware.GuardrailsConfig{Checker: &noopGuardrailChecker{}, Logger: logger}),
-		HITLMW:              middleware.NewHITL(middleware.HITLConfig{Store: &noopReviewStore{}, Logger: logger}),
-		AuthHandlers:        authHandlers,
-		ChatHandlers:        chatHandlers,
-		AdminAuditHandlers:  adminAuditHandlers,
-	})
-
-	// Generate test token
-	token, err := jwtService.IssueAccessToken(jwt.Claims{
-		UserID:   userID.String(),
-		TenantID: tenantID.String(),
-		Role:     "admin",
-		Scopes:   []string{"*"},
-	})
-	require.NoError(t, err)
+	// Get audit repo for direct access
+	auditRepo := pgadapter.NewAuditRepository(tc.DBPool)
 
 	// Test 1: Append + hash chain (10 events, verify chain)
 	t.Run("AppendAndHashChain", func(t *testing.T) {
-		testAppendAndHashChain(t, auditRepo, ctx, tenantID)
+		testAppendAndHashChain(t, auditRepo, tc.Ctx, tenantID, userID)
 	})
 
 	// Test 2: Concurrent append race (50 writers, no permanent seq gaps)
 	t.Run("ConcurrentAppendRace", func(t *testing.T) {
-		testConcurrentAppendRace(t, auditRepo, ctx, tenantID)
+		testConcurrentAppendRace(t, auditRepo, tc.Ctx, tenantID, userID)
 	})
 
 	// Test 3: VerifyChain detects tampering
 	t.Run("VerifyChainDetectsTampering", func(t *testing.T) {
-		testVerifyChainDetectsTampering(t, auditRepo, ctx, dbPool, tenantID)
+		testVerifyChainDetectsTampering(t, auditRepo, tc.Ctx, tc.DBPool, tenantID, userID)
 	})
 
 	// Test 4: VerifyChain on large chain (1000 events < 5s)
 	t.Run("VerifyChainLargeChain", func(t *testing.T) {
-		testVerifyChainLargeChain(t, auditRepo, ctx, tenantID)
+		testVerifyChainLargeChain(t, auditRepo, tc.Ctx, tenantID, userID)
 	})
 
 	// Test 5: Filters on GET /v1/admin/audit
@@ -193,11 +70,11 @@ func TestAuditIntegration(t *testing.T) {
 
 	// Test 6: RLS isolation (tenant A cannot see tenant B's events)
 	t.Run("RLSIsolation", func(t *testing.T) {
-		testRLSIsolation(t, auditRepo, ctx, dbPool)
+		testRLSIsolation(t, auditRepo, tc.Ctx, tc.DBPool)
 	})
 }
 
-func testAppendAndHashChain(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx context.Context, tenantID domain.UUID) {
+func testAppendAndHashChain(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx context.Context, tenantID, userID domain.UUID) {
 	// Append 10 events
 	for i := 0; i < 10; i++ {
 		event := &domain.AuditEvent{
@@ -223,7 +100,7 @@ func testAppendAndHashChain(t *testing.T, auditRepo *pgadapter.AuditRepository, 
 	assert.Equal(t, int64(10), result.TotalSeen)
 }
 
-func testConcurrentAppendRace(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx context.Context, tenantID domain.UUID) {
+func testConcurrentAppendRace(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx context.Context, tenantID, userID domain.UUID) {
 	const numWriters = 50
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -275,7 +152,7 @@ func testConcurrentAppendRace(t *testing.T, auditRepo *pgadapter.AuditRepository
 	assert.True(t, result.Valid, "Chain should be valid after concurrent writes")
 }
 
-func testVerifyChainDetectsTampering(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx context.Context, dbPool *pgxpool.Pool, tenantID domain.UUID) {
+func testVerifyChainDetectsTampering(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx context.Context, dbPool *pgxpool.Pool, tenantID, userID domain.UUID) {
 	// Append some events first
 	for i := 0; i < 5; i++ {
 		event := &domain.AuditEvent{
@@ -312,7 +189,7 @@ func testVerifyChainDetectsTampering(t *testing.T, auditRepo *pgadapter.AuditRep
 	assert.NotNil(t, result.Error)
 }
 
-func testVerifyChainLargeChain(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx context.Context, tenantID domain.UUID) {
+func testVerifyChainLargeChain(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx context.Context, tenantID, userID domain.UUID) {
 	const numEvents = 1000
 
 	// Append 1000 events
@@ -398,6 +275,7 @@ func testRLSIsolation(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx co
 	// Create tenant A and tenant B
 	tenantA := domain.NewUUID()
 	tenantB := domain.NewUUID()
+	userID := domain.NewUUID() // Local user for test events
 
 	_, err := dbPool.Exec(ctx, `
 		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Tenant A', 'active')
@@ -458,114 +336,6 @@ func testRLSIsolation(t *testing.T, auditRepo *pgadapter.AuditRepository, ctx co
 	for _, e := range eventsB {
 		assert.Equal(t, tenantB, e.TenantID)
 	}
-}
-
-// Helper function to apply migrations using goose or raw SQL
-func applyMigrations(ctx context.Context, dsn string) error {
-	conn, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	// For test, we'll run the migrations directly
-	// In production, use goose
-	migrations := []string{
-		`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`,
-		`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`,
-		`CREATE TABLE IF NOT EXISTS public.tenants (
-			id UUID PRIMARY KEY,
-			name VARCHAR(255) NOT NULL,
-			status VARCHAR(50) NOT NULL DEFAULT 'active',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS public.audit_events (
-			id UUID NOT NULL DEFAULT gen_random_uuid(),
-			tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
-			seq BIGINT NOT NULL,
-			actor_type TEXT NOT NULL CHECK (actor_type IN ('user', 'system', 'super_admin')),
-			actor_id UUID,
-			action TEXT NOT NULL,
-			entity_type TEXT,
-			entity_id UUID,
-			payload JSONB NOT NULL,
-			severity TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'warn', 'critical')),
-			prev_hash BYTEA,
-			hash BYTEA NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			PRIMARY KEY (id, tenant_id)
-		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_events_tenant_seq ON public.audit_events (tenant_id, seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_created ON public.audit_events (tenant_id, created_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON public.audit_events (tenant_id, actor_type, actor_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_events_action ON public.audit_events (tenant_id, action)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_events_entity ON public.audit_events (tenant_id, entity_type, entity_id)`,
-		`ALTER TABLE public.audit_events ENABLE ROW LEVEL SECURITY`,
-		`ALTER TABLE public.audit_events FORCE ROW LEVEL SECURITY`,
-		`CREATE POLICY audit_events_tenant_isolation ON public.audit_events USING (tenant_id = current_setting('app.current_tenant', true)::uuid) WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
-		`REVOKE UPDATE, DELETE ON public.audit_events FROM PUBLIC`,
-	}
-
-	for _, migration := range migrations {
-		_, err := conn.Exec(ctx, migration)
-		if err != nil {
-			return fmt.Errorf("migration failed: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func setupTestData(ctx context.Context, dbPool *pgxpool.Pool, tenantID, userID, roleID domain.UUID) error {
-	_, err := dbPool.Exec(ctx, `
-		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Test Tenant', 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, tenantID)
-	if err != nil {
-		return err
-	}
-
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
-		VALUES ($1, $2, 'test@example.com', 'hashed', 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, userID, tenantID)
-	if err != nil {
-		return err
-	}
-
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.roles (id, tenant_id, name) VALUES ($1, $2, 'admin')
-		ON CONFLICT (id) DO NOTHING
-	`, roleID, tenantID)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// No-op implementations for tests
-
-type noopGuardrailChecker struct{}
-
-func (n *noopGuardrailChecker) CheckInput(ctx context.Context, tenantID domain.UUID, input string) (*domain.GuardrailViolation, error) {
-	return nil, nil
-}
-
-func (n *noopGuardrailChecker) CheckOutput(ctx context.Context, tenantID domain.UUID, output string) (*domain.GuardrailViolation, error) {
-	return nil, nil
-}
-
-type noopReviewStore struct{}
-
-func (n *noopReviewStore) GetByToken(ctx context.Context, tokenHash string) (*domain.ReviewRequest, error) {
-	return nil, nil
-}
-
-func (n *noopReviewStore) Update(ctx context.Context, req *domain.ReviewRequest) error {
-	return nil
 }
 
 // Test canonicalization and hash chain logic

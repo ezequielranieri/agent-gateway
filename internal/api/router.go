@@ -13,16 +13,17 @@ import (
 
 // RouterConfig holds dependencies for the router
 type RouterConfig struct {
-	Config           *config.Config
-	Logger           zerolog.Logger
-	AuthMW           func(http.Handler) http.Handler
-	TenantMW         func(http.Handler) http.Handler
-	RateLimitMW      func(http.Handler) http.Handler
-	AuditMW          func(http.Handler) http.Handler
-	GuardrailsMW     func(http.Handler) http.Handler
-	HITLMW           func(http.Handler) http.Handler
-	AuthHandlers     *handlers.AuthHandlers
-	ChatHandlers     *handlers.ChatHandlers
+	Config             *config.Config
+	Logger             zerolog.Logger
+	AuthMW             func(http.Handler) http.Handler
+	TenantMW           func(http.Handler) http.Handler
+	RateLimitMW        func(http.Handler) http.Handler
+	AuditMW            func(http.Handler) http.Handler
+	GuardrailsMW       func(http.Handler) http.Handler
+	HITLMW             func(http.Handler) http.Handler
+	AuthHandlers       *handlers.AuthHandlers
+	ReviewHandlers     *handlers.ReviewHandlers
+	ChatHandlers       *handlers.ChatHandlers
 	AdminAuditHandlers *handlers.AdminAuditHandlers
 }
 
@@ -109,12 +110,24 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			// Review routes (HITL)
 			r.Route("/reviews", func(r chi.Router) {
-				r.Post("/", createReviewHandler)
-				r.Get("/", listReviewsHandler)
-				r.Get("/{id}", getReviewHandler)
-				r.Post("/{id}/approve", approveReviewHandler)
-				r.Post("/{id}/reject", rejectReviewHandler)
-				r.Get("/{id}/stream", streamReviewHandler) // SSE
+				if cfg.ReviewHandlers != nil {
+					r.Post("/", cfg.ReviewHandlers.CreateReview)
+					r.Get("/", cfg.ReviewHandlers.ListReviews)
+					r.Get("/{id}", cfg.ReviewHandlers.GetReview)
+					r.Post("/{id}/approve", cfg.ReviewHandlers.ApproveReview)
+					r.Post("/{id}/reject", cfg.ReviewHandlers.RejectReview)
+					r.Patch("/{id}", cfg.ReviewHandlers.ExecuteReview)
+					r.Get("/{id}/stream", cfg.ReviewHandlers.StreamReview)      // SSE with ticket auth
+					r.Get("/{id}/status", cfg.ReviewHandlers.GetReviewStatus)  // Polling for agents
+				} else {
+					// Fallback to placeholders
+					r.Post("/", createReviewHandler)
+					r.Get("/", listReviewsHandler)
+					r.Get("/{id}", getReviewHandler)
+					r.Post("/{id}/approve", approveReviewHandler)
+					r.Post("/{id}/reject", rejectReviewHandler)
+					r.Get("/{id}/stream", streamReviewHandler)
+				}
 			})
 
 			// Chat/Completions route (gateway core)
