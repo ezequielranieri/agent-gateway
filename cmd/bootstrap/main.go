@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
 	"os"
 	"time"
 
@@ -13,8 +10,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/crypto"
 	"github.com/ezequielranieri/agent-gateway/internal/config"
-	"golang.org/x/crypto/argon2"
 )
 
 var (
@@ -42,19 +39,12 @@ func main() {
 		logger.Fatal().Msg("Password must be at least 8 characters")
 	}
 
-	// Hash password with Argon2id
-	// OWASP parameters: m=65536 (64 MiB), t=1, p=4, 32-byte key, 16-byte salt
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		logger.Fatal().Err(err).Msg("Failed to generate salt")
+	// Hash password with Argon2id adapter
+	argon2Params := crypto.DefaultParams()
+	phcHash, err := crypto.HashPassword(*password, argon2Params)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to hash password")
 	}
-
-	hash := argon2.IDKey([]byte(*password), salt, 1, 64*1024, 4, 32)
-
-	// Encode in PHC format: $argon2id$v=19$m=65536,t=1,p=4$salt$hash
-	phcHash := fmt.Sprintf("$argon2id$v=19$m=65536,t=1,p=4$%s$%s",
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(hash))
 
 	// Initialize database pool
 	dbPool, err := initDB(cfg.Database, logger)
@@ -63,30 +53,21 @@ func main() {
 	}
 	defer dbPool.Close()
 
-	// Insert Super Admin
+	// Insert Super Admin using bootstrap function
 	ctx := context.Background()
-	var exists bool
+	var superAdminID string
 	err = dbPool.QueryRow(ctx, `
-		SELECT EXISTS(SELECT 1 FROM public.super_admins WHERE email = $1)
-	`, *email).Scan(&exists)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to check existing Super Admin")
-	}
-
-	if exists {
-		logger.Fatal().Msgf("Super Admin with email %s already exists", *email)
-	}
-
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.super_admins (email, password_hash)
-		VALUES ($1, $2)
-	`, *email, phcHash)
+		SELECT bootstrap_super_admin($1, $2)
+	`, *email, phcHash).Scan(&superAdminID)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to create Super Admin")
 	}
 
-	logger.Info().Str("email", *email).Msg("Super Admin created successfully")
-	fmt.Printf("Super Admin created: %s\n", *email)
+	if superAdminID == "" {
+		logger.Fatal().Msgf("Super Admin with email %s already exists", *email)
+	}
+
+	logger.Info().Str("email", *email).Str("id", superAdminID).Msg("Super Admin created successfully")
 }
 
 func initDB(cfg config.DatabaseConfig, logger zerolog.Logger) (*pgxpool.Pool, error) {

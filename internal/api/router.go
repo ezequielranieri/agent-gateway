@@ -7,19 +7,21 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog"
 
+	"github.com/ezequielranieri/agent-gateway/internal/api/handlers"
 	"github.com/ezequielranieri/agent-gateway/internal/config"
 )
 
 // RouterConfig holds dependencies for the router
 type RouterConfig struct {
-	Config     *config.Config
-	Logger     zerolog.Logger
-	AuthMW     func(http.Handler) http.Handler
-	TenantMW   func(http.Handler) http.Handler
-	RateLimitMW func(http.Handler) http.Handler
-	AuditMW    func(http.Handler) http.Handler
-	GuardrailsMW func(http.Handler) http.Handler
-	HITLMW     func(http.Handler) http.Handler
+	Config        *config.Config
+	Logger        zerolog.Logger
+	AuthMW        func(http.Handler) http.Handler
+	TenantMW      func(http.Handler) http.Handler
+	RateLimitMW   func(http.Handler) http.Handler
+	AuditMW       func(http.Handler) http.Handler
+	GuardrailsMW  func(http.Handler) http.Handler
+	HITLMW        func(http.Handler) http.Handler
+	AuthHandlers  *handlers.AuthHandlers
 }
 
 // NewRouter creates a new chi router with all middleware and routes
@@ -38,13 +40,20 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	// API v1 routes with middleware chain
 	r.Route("/v1", func(r chi.Router) {
-		// Auth endpoints (login, refresh, logout) - some need auth, some don't
+		// Auth endpoints (login, refresh, register) - no auth required
 		r.Route("/auth", func(r chi.Router) {
-			r.Post("/login", loginHandler)           // No auth
-			r.Post("/refresh", refreshHandler)       // No auth (uses refresh token)
-			r.Post("/logout", logoutHandler)         // Requires auth
-			r.Get("/sessions", listSessionsHandler)  // Requires auth
-			r.Delete("/sessions", revokeAllHandler)  // Requires auth
+			r.Post("/login", cfg.AuthHandlers.Login)
+			r.Post("/super-admin/login", cfg.AuthHandlers.SuperAdminLogin)
+			r.Post("/refresh", cfg.AuthHandlers.Refresh)
+			r.Post("/register", cfg.AuthHandlers.Register)
+
+			// Protected auth endpoints
+			r.Group(func(r chi.Router) {
+				r.Use(cfg.AuthMW)
+				r.Post("/logout", cfg.AuthHandlers.Logout)
+				r.Get("/sessions", cfg.AuthHandlers.ListSessions)
+				r.Delete("/sessions", cfg.AuthHandlers.RevokeAllSessions)
+			})
 		})
 
 		// Protected routes - require full middleware chain
@@ -85,6 +94,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/quotas/{id}", getQuotaHandler)
 				r.Patch("/quotas/{id}", updateQuotaHandler)
 				r.Delete("/quotas/{id}", deleteQuotaHandler)
+
+				// Admin-only: revoke user sessions
+				r.Post("/users/{id}/revoke-sessions", cfg.AuthHandlers.RevokeUserSessions)
 			})
 
 			// Review routes (HITL)
@@ -120,38 +132,7 @@ func readyHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ready"}`))
 }
 
-// Auth handlers (placeholders)
-func loginHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message":"login placeholder"}`))
-}
-
-func refreshHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message":"refresh placeholder"}`))
-}
-
-func logoutHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message":"logout placeholder"}`))
-}
-
-func listSessionsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message":"list sessions placeholder"}`))
-}
-
-func revokeAllHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message":"revoke all placeholder"}`))
-}
-
-// Admin handlers (placeholders)
+// Admin handlers (placeholders - to be implemented in later phases)
 func listTenantsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,10 +14,14 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
+	"github.com/ezequielranieri/agent-gateway/internal/api/handlers"
 	"github.com/ezequielranieri/agent-gateway/internal/config"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/auth"
 )
 
 func main() {
@@ -51,13 +56,33 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	// Initialize middleware
+	// Initialize repositories
+	userRepo := postgres.NewUserRepository(dbPool)
+	refreshRepo := postgres.NewRefreshTokenRepository(dbPool)
+
+	// Initialize JWT adapter
+	// Generate a random signing key if not provided
+	signingKey := []byte(cfg.JWT.Secret)
+	if len(signingKey) == 0 {
+		signingKey = make([]byte, 32)
+		rand.Read(signingKey)
+	}
+	keyStore := jwt.NewKeyStore("v1", signingKey, map[string][]byte{
+		"v1": signingKey,
+	})
+	jwtService := jwt.NewAuthService(keyStore, cfg.JWT.Issuer, cfg.JWT.Audience)
+
+	// Initialize auth use case
+	authUC := auth.NewAuthUseCase(userRepo, refreshRepo, jwtService)
+	superAdminLoginUC := auth.NewSuperAdminLoginUseCase(dbPool, jwtService)
+
+	// Initialize auth handlers
+	authHandlers := handlers.NewAuthHandlers(authUC, superAdminLoginUC, logger)
+
+	// Initialize middleware with real JWT service
 	authMW := middleware.NewAuth(middleware.AuthConfig{
-		Secret:      cfg.JWT.Secret,
-		Issuer:      cfg.JWT.Issuer,
-		Audience:    cfg.JWT.Audience,
-		KeyRotation: middleware.KeyRotationConfig(cfg.JWT.KeyRotation),
-		Logger:      logger,
+		JWTService: jwtService,
+		Logger:     logger,
 	})
 
 	tenantMW := middleware.NewTenant(middleware.TenantConfig{
@@ -90,7 +115,7 @@ func main() {
 		Logger: logger,
 	})
 
-	// Create router
+	// Create router with auth handlers
 	router := api.NewRouter(api.RouterConfig{
 		Config:         cfg,
 		Logger:         logger,
@@ -100,6 +125,7 @@ func main() {
 		AuditMW:        auditMW,
 		GuardrailsMW:   guardrailsMW,
 		HITLMW:         hitlMW,
+		AuthHandlers:   authHandlers,
 	})
 
 	// Create HTTP server
