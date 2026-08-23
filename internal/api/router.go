@@ -13,16 +13,17 @@ import (
 
 // RouterConfig holds dependencies for the router
 type RouterConfig struct {
-	Config        *config.Config
-	Logger        zerolog.Logger
-	AuthMW        func(http.Handler) http.Handler
-	TenantMW      func(http.Handler) http.Handler
-	RateLimitMW   func(http.Handler) http.Handler
-	AuditMW       func(http.Handler) http.Handler
-	GuardrailsMW  func(http.Handler) http.Handler
-	HITLMW        func(http.Handler) http.Handler
-	AuthHandlers  *handlers.AuthHandlers
-	ChatHandlers  *handlers.ChatHandlers
+	Config           *config.Config
+	Logger           zerolog.Logger
+	AuthMW           func(http.Handler) http.Handler
+	TenantMW         func(http.Handler) http.Handler
+	RateLimitMW      func(http.Handler) http.Handler
+	AuditMW          func(http.Handler) http.Handler
+	GuardrailsMW     func(http.Handler) http.Handler
+	HITLMW           func(http.Handler) http.Handler
+	AuthHandlers     *handlers.AuthHandlers
+	ChatHandlers     *handlers.ChatHandlers
+	AdminAuditHandlers *handlers.AdminAuditHandlers
 }
 
 // NewRouter creates a new chi router with all middleware and routes
@@ -98,6 +99,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 				// Admin-only: revoke user sessions
 				r.Post("/users/{id}/revoke-sessions", cfg.AuthHandlers.RevokeUserSessions)
+
+				// Audit routes
+				if cfg.AdminAuditHandlers != nil {
+					r.Get("/audit", cfg.AdminAuditHandlers.ListAuditEvents)
+					r.Post("/audit/verify-chain", cfg.AdminAuditHandlers.VerifyChain)
+				}
 			})
 
 			// Review routes (HITL)

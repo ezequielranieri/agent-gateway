@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
 	"time"
@@ -59,8 +61,21 @@ func (a *AuditEvent) ChainInput() string {
 		a.TenantID.String() + "|" +
 		actor + "|" +
 		a.Action + "|" +
-		a.EntityType + "|" +
+		a.EntityType + "|"+
 		entity + "|" +
 		payload + "|" +
 		created
+}
+
+// ComputeChainHash computes the SHA256 hash of the chain input
+func (a *AuditEvent) ComputeChainHash() string {
+	input := a.ChainInput()
+	hash := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(hash[:])
+}
+
+// VerifyChainInput verifies that the event's chain_hash matches the computed hash
+func (a *AuditEvent) VerifyChainInput() bool {
+	expected := a.ComputeChainHash()
+	return a.ChainHash == expected
 }

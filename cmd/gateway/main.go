@@ -61,6 +61,7 @@ func main() {
 	userRepo := postgres.NewUserRepository(dbPool)
 	refreshRepo := postgres.NewRefreshTokenRepository(dbPool)
 	quotaRepo := postgres.NewQuotaRepository(dbPool)
+	auditRepo := postgres.NewAuditRepository(dbPool)
 
 	// Initialize JWT adapter
 	// Generate a random signing key if not provided
@@ -80,6 +81,9 @@ func main() {
 
 	// Initialize auth handlers
 	authHandlers := handlers.NewAuthHandlers(authUC, superAdminLoginUC, logger)
+
+	// Initialize admin audit handlers
+	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
 
 	// Initialize chat handlers
 	chatHandlers := handlers.NewChatHandlers(logger)
@@ -107,7 +111,7 @@ func main() {
 	})
 
 	auditMW := middleware.NewAudit(middleware.AuditConfig{
-		Store:  &noopAuditStore{},
+		Store:  auditRepo,
 		Logger: logger,
 	})
 
@@ -123,16 +127,17 @@ func main() {
 
 	// Create router with auth handlers
 	router := api.NewRouter(api.RouterConfig{
-		Config:        cfg,
-		Logger:        logger,
-		AuthMW:        authMW,
-		TenantMW:      tenantMW,
-		RateLimitMW:   rateLimitMW,
-		AuditMW:       auditMW,
-		GuardrailsMW:  guardrailsMW,
-		HITLMW:        hitlMW,
-		AuthHandlers:  authHandlers,
-		ChatHandlers:  chatHandlers,
+		Config:              cfg,
+		Logger:              logger,
+		AuthMW:              authMW,
+		TenantMW:            tenantMW,
+		RateLimitMW:         rateLimitMW,
+		AuditMW:             auditMW,
+		GuardrailsMW:        guardrailsMW,
+		HITLMW:              hitlMW,
+		AuthHandlers:        authHandlers,
+		ChatHandlers:        chatHandlers,
+		AdminAuditHandlers:  adminAuditHandlers,
 	})
 
 	// Create HTTP server
