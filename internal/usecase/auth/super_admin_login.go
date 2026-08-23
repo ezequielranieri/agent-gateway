@@ -49,7 +49,7 @@ func (uc *SuperAdminLoginUseCase) Execute(ctx context.Context, input SuperAdminL
 	}
 
 	// Verify password using Argon2id
-	if err := crypto.VerifyPassword(passwordHash, input.Password); err != nil {
+	if err := crypto.VerifyPassword(input.Password, passwordHash); err != nil {
 		return nil, domain.ErrInvalidCredentials
 	}
 

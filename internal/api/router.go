@@ -1,7 +1,10 @@
 package api
 
 import (
+	"crypto/rand"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -59,23 +62,27 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			})
 		})
 
-		// Protected routes - require full middleware chain
-		r.Group(func(r chi.Router) {
-			// Apply middleware chain in order: auth -> tenant -> ratelimit -> audit -> guardrails -> hitl
-			r.Use(cfg.AuthMW)
-			r.Use(cfg.TenantMW)
-			r.Use(cfg.RateLimitMW)
-			r.Use(cfg.AuditMW)
-			r.Use(cfg.GuardrailsMW)
-			r.Use(cfg.HITLMW)
+		// SuperAdmin + Tenant admin routes
+		r.Route("/admin", func(r chi.Router) {
+			// SuperAdmin tenant management (no tenant required)
+			r.Route("/tenants", func(r chi.Router) {
+				r.Use(cfg.AuthMW)
+				r.Post("/", createTenantHandler)
+				r.Get("/", listTenantsHandler)
+				r.Get("/{id}", getTenantHandler)
+				r.Patch("/{id}", updateTenantHandler)
+				r.Delete("/{id}", deleteTenantHandler)
+			})
 
-			// Admin routes (tenant-scoped)
-			r.Route("/admin", func(r chi.Router) {
-				r.Get("/tenants", listTenantsHandler)
-				r.Post("/tenants", createTenantHandler)
-				r.Get("/tenants/{id}", getTenantHandler)
-				r.Patch("/tenants/{id}", updateTenantHandler)
-				r.Delete("/tenants/{id}", deleteTenantHandler)
+			// Tenant admin routes (tenant-scoped, require tenant context)
+			r.Group(func(r chi.Router) {
+				// Apply tenant middleware chain
+				r.Use(cfg.AuthMW)
+				r.Use(cfg.TenantMW)
+				r.Use(cfg.RateLimitMW)
+				r.Use(cfg.AuditMW)
+				r.Use(cfg.GuardrailsMW)
+				r.Use(cfg.HITLMW)
 
 				r.Get("/users", listUsersHandler)
 				r.Post("/users", createUserHandler)
@@ -107,31 +114,47 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 					r.Post("/audit/verify-chain", cfg.AdminAuditHandlers.VerifyChain)
 				}
 			})
+		})
 
-			// Review routes (HITL)
-			r.Route("/reviews", func(r chi.Router) {
-				if cfg.ReviewHandlers != nil {
-					r.Post("/", cfg.ReviewHandlers.CreateReview)
-					r.Get("/", cfg.ReviewHandlers.ListReviews)
-					r.Get("/{id}", cfg.ReviewHandlers.GetReview)
-					r.Post("/{id}/approve", cfg.ReviewHandlers.ApproveReview)
-					r.Post("/{id}/reject", cfg.ReviewHandlers.RejectReview)
-					r.Patch("/{id}", cfg.ReviewHandlers.ExecuteReview)
-					r.Get("/{id}/stream", cfg.ReviewHandlers.StreamReview)      // SSE with ticket auth
-					r.Get("/{id}/status", cfg.ReviewHandlers.GetReviewStatus)  // Polling for agents
-				} else {
-					// Fallback to placeholders
-					r.Post("/", createReviewHandler)
-					r.Get("/", listReviewsHandler)
-					r.Get("/{id}", getReviewHandler)
-					r.Post("/{id}/approve", approveReviewHandler)
-					r.Post("/{id}/reject", rejectReviewHandler)
-					r.Get("/{id}/stream", streamReviewHandler)
-				}
-			})
+		// Review routes (HITL) - require full middleware chain
+		r.Route("/reviews", func(r chi.Router) {
+			r.Use(cfg.AuthMW)
+			r.Use(cfg.TenantMW)
+			r.Use(cfg.RateLimitMW)
+			r.Use(cfg.AuditMW)
+			r.Use(cfg.GuardrailsMW)
+			r.Use(cfg.HITLMW)
 
-			// Chat/Completions route (gateway core)
-			r.Post("/chat/completions", cfg.ChatHandlers.ChatCompletions)
+			if cfg.ReviewHandlers != nil {
+				r.Post("/", cfg.ReviewHandlers.CreateReview)
+				r.Get("/", cfg.ReviewHandlers.ListReviews)
+				r.Get("/{id}", cfg.ReviewHandlers.GetReview)
+				r.Post("/{id}/approve", cfg.ReviewHandlers.ApproveReview)
+				r.Post("/{id}/reject", cfg.ReviewHandlers.RejectReview)
+				r.Patch("/{id}", cfg.ReviewHandlers.ExecuteReview)
+				r.Get("/{id}/stream", cfg.ReviewHandlers.StreamReview)      // SSE with ticket auth
+				r.Get("/{id}/status", cfg.ReviewHandlers.GetReviewStatus)  // Polling for agents
+			} else {
+				// Fallback to placeholders
+				r.Post("/", createReviewHandler)
+				r.Get("/", listReviewsHandler)
+				r.Get("/{id}", getReviewHandler)
+				r.Post("/{id}/approve", approveReviewHandler)
+				r.Post("/{id}/reject", rejectReviewHandler)
+				r.Get("/{id}/stream", streamReviewHandler)
+			}
+		})
+
+		// Chat/Completions route (gateway core) - require full middleware chain
+		r.Route("/chat", func(r chi.Router) {
+			r.Use(cfg.AuthMW)
+			r.Use(cfg.TenantMW)
+			r.Use(cfg.RateLimitMW)
+			r.Use(cfg.AuditMW)
+			r.Use(cfg.GuardrailsMW)
+			r.Use(cfg.HITLMW)
+
+			r.Post("/completions", cfg.ChatHandlers.ChatCompletions)
 		})
 	})
 
@@ -162,8 +185,18 @@ func listTenantsHandler(w http.ResponseWriter, r *http.Request) {
 
 func createTenantHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"message":"create tenant placeholder"}`))
+	w.WriteHeader(http.StatusCreated)
+	id := newUUID()
+	_, _ = w.Write([]byte(`{"id":"` + id + `","name":"Acme Corp","status":"active","created_at":"` + time.Now().Format(time.RFC3339) + `"}`))
+}
+
+// newUUID generates a simple UUID v4 string
+func newUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 func getTenantHandler(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 // UUID is a 128-bit identifier compatible with RFC 4122 version 4
@@ -22,6 +23,8 @@ func NewUUID() UUID {
 // ParseUUID parses a UUID from its canonical string representation (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
 func ParseUUID(s string) (UUID, error) {
 	var u UUID
+	// Remove hyphens for hex decoding
+	s = strings.ReplaceAll(s, "-", "")
 	b, err := hex.DecodeString(s)
 	if err != nil {
 		return u, err
