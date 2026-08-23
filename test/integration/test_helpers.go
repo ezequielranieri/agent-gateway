@@ -398,6 +398,10 @@ func (n *noopGuardrailChecker) CheckOutput(ctx context.Context, tenantID domain.
 	return nil, nil
 }
 
+func (n *noopGuardrailChecker) SanitizeOutput(output string) string {
+	return output
+}
+
 type noopReviewStore struct{}
 
 func (n *noopReviewStore) GetByToken(ctx context.Context, tokenHash string) (*domain.ReviewRequest, error) {

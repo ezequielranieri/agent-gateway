@@ -81,8 +81,31 @@ type (
 
 	// GuardrailsConfig holds guardrails settings
 	GuardrailsConfig struct {
-		Enabled bool              `koanf:"enabled"`
-		Rules   []GuardrailRule   `koanf:"rules"`
+		Enabled        bool                 `koanf:"enabled"`
+		PIIPatterns    PIIPatternsConfig    `koanf:"pii_patterns"`
+		InjectionPatterns []string          `koanf:"injection_patterns"`
+		Wordlist       WordlistConfig       `koanf:"wordlist"`
+		LengthLimits   LengthLimitsConfig   `koanf:"length_limits"`
+		Rules          []GuardrailRule      `koanf:"rules"` // Legacy custom rules
+	}
+
+	// PIIPatternsConfig holds PII detection settings
+	PIIPatternsConfig struct {
+		Email       bool `koanf:"email"`
+		CreditCard  bool `koanf:"credit_card"`
+		SSN         bool `koanf:"ssn"`
+	}
+
+	// WordlistConfig holds wordlist settings
+	WordlistConfig struct {
+		Enabled     bool   `koanf:"enabled"`
+		CustomFile  string `koanf:"custom_file"`
+	}
+
+	// LengthLimitsConfig holds length limit settings
+	LengthLimitsConfig struct {
+		MaxInputChars  int `koanf:"max_input_chars"`
+		MaxOutputChars int `koanf:"max_output_chars"`
 	}
 
 	// GuardrailRule represents a single guardrail rule

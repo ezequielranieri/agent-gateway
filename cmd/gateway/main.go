@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/guardrail"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	redisadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
@@ -128,9 +129,13 @@ func main() {
 		Logger: logger,
 	})
 
+	// Initialize LocalGuardrail
+	localGuardrail := guardrail.NewLocalGuardrail(cfg.Guardrails, logger)
+
 	guardrailsMW := middleware.NewGuardrails(middleware.GuardrailsConfig{
-		Checker: &noopGuardrailChecker{},
-		Logger:  logger,
+		Checker:   localGuardrail,
+		AuditRepo: auditRepo,
+		Logger:    logger,
 	})
 
 	hitlMW := middleware.NewHITL(middleware.HITLConfig{
@@ -260,6 +265,10 @@ func (n *noopGuardrailChecker) CheckInput(ctx context.Context, tenantID domain.U
 
 func (n *noopGuardrailChecker) CheckOutput(ctx context.Context, tenantID domain.UUID, output string) (*domain.GuardrailViolation, error) {
 	return nil, nil
+}
+
+func (n *noopGuardrailChecker) SanitizeOutput(output string) string {
+	return output
 }
 
 type noopReviewStore struct{}
