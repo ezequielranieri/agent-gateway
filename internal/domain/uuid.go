@@ -3,6 +3,7 @@ package domain
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -48,6 +49,25 @@ func MustParseUUID(s string) UUID {
 // String returns the canonical string representation
 func (u UUID) String() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+}
+
+// MarshalJSON implements json.Marshaler interface
+func (u UUID) MarshalJSON() ([]byte, error) {
+	return json.Marshal(u.String())
+}
+
+// UnmarshalJSON implements json.Unmarshaler interface
+func (u *UUID) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	parsed, err := ParseUUID(s)
+	if err != nil {
+		return err
+	}
+	*u = parsed
+	return nil
 }
 
 // Bytes returns the raw 16 bytes
