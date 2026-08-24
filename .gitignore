@@ -43,4 +43,4 @@ internal/adapter/postgres/sqlc/*.go
 !internal/adapter/postgres/sqlc/querier.go
 
 # Engram (local only)
-.engram/
+.engram/nul
