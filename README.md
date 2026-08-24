@@ -4,7 +4,7 @@
 
 Multi-tenant Agent Gateway / Control Plane for LLM agents — the **only path** between your application and the model. Every call authenticated, authorized, rate-limited, audited, and guarded.
 
-> Status: **MVP in progress** — Phase 0a in progress (domain entities, RLS schema, config, middleware chain, router, OpenAPI spec). Rate limiting, audit log, HITL, guardrails in design — see the roadmap below.
+> Status: **MVP complete** — Phases 0-4 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails). Phases 5-8 (Model Routing, Tool Sandbox, External Classifier, CI/CD) deferred — see roadmap below.
 
 ## The problem
 
@@ -199,11 +199,11 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 
 ## Roadmap
 
-- [ ] **Phase 0** — Foundation: domain entities, RLS schema, auth primitives, middleware chain
-- [ ] **Phase 1** — Rate limiting: Redis token bucket (reqs/tokens/tools), per tenant/user/role
-- [ ] **Phase 2** — Audit log: append-only + hash chaining + VerifyChain
-- [ ] **Phase 3** — HITL: state machine + SSE + re-validation on approve
-- [ ] **Phase 4** — Guardrails: domain interface + LocalGuardrail (regex/wordlist/PII)
+- [x] **Phase 0** — Foundation: domain entities, RLS schema, auth primitives, middleware chain
+- [x] **Phase 1** — Rate limiting: Redis token bucket (reqs/tokens/tools), per tenant/user/role
+- [x] **Phase 2** — Audit log: append-only + hash chaining + VerifyChain
+- [x] **Phase 3** — HITL: state machine + SSE + re-validation + atomic approve
+- [x] **Phase 4** — Guardrails: domain interface + LocalGuardrail (regex/wordlist/PII)
 - [ ] **Phase 5** — Model routing: provider port + fallback + pricing abstraction
 - [ ] **Phase 6** — Tool sandbox: `ToolExecutor` interface + wazero WASM adapter
 - [ ] **Phase 7** — External guardrail classifier adapter
