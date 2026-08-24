@@ -25,6 +25,10 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/auth"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/hitl"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/quota"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/role"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/tenant"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/user"
 )
 
 func main() {
@@ -65,6 +69,8 @@ func main() {
 	quotaRepo := postgres.NewQuotaRepository(dbPool)
 	auditRepo := postgres.NewAuditRepository(dbPool)
 	reviewRepo := postgres.NewReviewRepository(dbPool)
+	tenantRepo := postgres.NewTenantRepository(dbPool)
+	roleRepo := postgres.NewRoleRepository(dbPool)
 
 	// Initialize JWT adapter
 	// Generate a random signing key if not provided
@@ -82,6 +88,18 @@ func main() {
 	authUC := auth.NewAuthUseCase(userRepo, refreshRepo, jwtService)
 	superAdminLoginUC := auth.NewSuperAdminLoginUseCase(dbPool, jwtService)
 
+	// Initialize tenant use case
+	tenantUC := tenant.NewUseCase(tenantRepo)
+
+	// Initialize user use case
+	userUC := user.NewUseCase(userRepo)
+
+	// Initialize role use case
+	roleUC := role.NewUseCase(roleRepo)
+
+	// Initialize quota use case
+	quotaUC := quota.NewUseCase(quotaRepo)
+
 	// Initialize HITL use case
 	hitlUC := hitl.NewHITLUseCase(hitl.HITLConfig{
 		ReviewRepo:   reviewRepo,
@@ -92,6 +110,12 @@ func main() {
 
 	// Initialize auth handlers
 	authHandlers := handlers.NewAuthHandlers(authUC, superAdminLoginUC, logger)
+
+	// Initialize admin handlers
+	adminTenantsHandler := handlers.NewAdminTenantsHandler(tenantUC, logger)
+	adminUsersHandler := handlers.NewAdminUsersHandler(userUC, logger)
+	adminRolesHandler := handlers.NewAdminRolesHandler(roleUC, logger)
+	adminQuotasHandler := handlers.NewAdminQuotasHandler(quotaUC, logger)
 
 	// Initialize admin audit handlers
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
@@ -144,18 +168,22 @@ func main() {
 
 	// Create router with auth handlers
 	router := api.NewRouter(api.RouterConfig{
-		Config:              cfg,
-		Logger:              logger,
-		AuthMW:              authMW,
-		TenantMW:            tenantMW,
-		RateLimitMW:         rateLimitMW,
-		AuditMW:             auditMW,
-		GuardrailsMW:        guardrailsMW,
-		HITLMW:              hitlMW,
-		AuthHandlers:        authHandlers,
-		ReviewHandlers:      reviewHandlers,
-		ChatHandlers:        chatHandlers,
-		AdminAuditHandlers:  adminAuditHandlers,
+		Config:                 cfg,
+		Logger:                 logger,
+		AuthMW:                 authMW,
+		TenantMW:               tenantMW,
+		RateLimitMW:            rateLimitMW,
+		AuditMW:                auditMW,
+		GuardrailsMW:           guardrailsMW,
+		HITLMW:                 hitlMW,
+		AuthHandlers:           authHandlers,
+		ReviewHandlers:         reviewHandlers,
+		ChatHandlers:           chatHandlers,
+		AdminAuditHandlers:     adminAuditHandlers,
+		AdminTenantsHandler:    adminTenantsHandler,
+		AdminUsersHandler:      adminUsersHandler,
+		AdminRolesHandler:      adminRolesHandler,
+		AdminQuotasHandler:     adminQuotasHandler,
 	})
 
 	// Create HTTP server

@@ -45,4 +45,7 @@ var (
 
 	// ErrReviewNotPending indicates the review is not in PENDING state
 	ErrReviewNotPending = errors.New("review not pending")
+
+	// ErrNotImplemented indicates a feature is not yet implemented
+	ErrNotImplemented = errors.New("not implemented")
 )

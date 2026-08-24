@@ -16,18 +16,22 @@ import (
 
 // RouterConfig holds dependencies for the router
 type RouterConfig struct {
-	Config             *config.Config
-	Logger             zerolog.Logger
-	AuthMW             func(http.Handler) http.Handler
-	TenantMW           func(http.Handler) http.Handler
-	RateLimitMW        func(http.Handler) http.Handler
-	AuditMW            func(http.Handler) http.Handler
-	GuardrailsMW       func(http.Handler) http.Handler
-	HITLMW             func(http.Handler) http.Handler
-	AuthHandlers       *handlers.AuthHandlers
-	ReviewHandlers     *handlers.ReviewHandlers
-	ChatHandlers       *handlers.ChatHandlers
-	AdminAuditHandlers *handlers.AdminAuditHandlers
+	Config                 *config.Config
+	Logger                 zerolog.Logger
+	AuthMW                 func(http.Handler) http.Handler
+	TenantMW               func(http.Handler) http.Handler
+	RateLimitMW            func(http.Handler) http.Handler
+	AuditMW                func(http.Handler) http.Handler
+	GuardrailsMW           func(http.Handler) http.Handler
+	HITLMW                 func(http.Handler) http.Handler
+	AuthHandlers           *handlers.AuthHandlers
+	ReviewHandlers         *handlers.ReviewHandlers
+	ChatHandlers           *handlers.ChatHandlers
+	AdminAuditHandlers     *handlers.AdminAuditHandlers
+	AdminTenantsHandler    *handlers.AdminTenantsHandler
+	AdminUsersHandler      *handlers.AdminUsersHandler
+	AdminRolesHandler      *handlers.AdminRolesHandler
+	AdminQuotasHandler     *handlers.AdminQuotasHandler
 }
 
 // NewRouter creates a new chi router with all middleware and routes
@@ -67,11 +71,16 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// SuperAdmin tenant management (no tenant required)
 			r.Route("/tenants", func(r chi.Router) {
 				r.Use(cfg.AuthMW)
-				r.Post("/", createTenantHandler)
-				r.Get("/", listTenantsHandler)
-				r.Get("/{id}", getTenantHandler)
-				r.Patch("/{id}", updateTenantHandler)
-				r.Delete("/{id}", deleteTenantHandler)
+				if cfg.AdminTenantsHandler != nil {
+					cfg.AdminTenantsHandler.RegisterRoutes(r)
+				} else {
+					// Fallback to placeholders
+					r.Post("/", createTenantHandler)
+					r.Get("/", listTenantsHandler)
+					r.Get("/{id}", getTenantHandler)
+					r.Patch("/{id}", updateTenantHandler)
+					r.Delete("/{id}", deleteTenantHandler)
+				}
 			})
 
 			// Tenant admin routes (tenant-scoped, require tenant context)
@@ -84,26 +93,38 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Use(cfg.GuardrailsMW)
 				r.Use(cfg.HITLMW)
 
-				r.Get("/users", listUsersHandler)
-				r.Post("/users", createUserHandler)
-				r.Get("/users/{id}", getUserHandler)
-				r.Patch("/users/{id}", updateUserHandler)
-				r.Delete("/users/{id}", deleteUserHandler)
+				if cfg.AdminUsersHandler != nil {
+					cfg.AdminUsersHandler.RegisterRoutes(r)
+				} else {
+					// Fallback to placeholders
+					r.Get("/users", listUsersHandler)
+					r.Post("/users", createUserHandler)
+					r.Get("/users/{id}", getUserHandler)
+					r.Patch("/users/{id}", updateUserHandler)
+					r.Delete("/users/{id}", deleteUserHandler)
+				}
 
-				r.Get("/roles", listRolesHandler)
-				r.Post("/roles", createRoleHandler)
-				r.Get("/roles/{id}", getRoleHandler)
-				r.Patch("/roles/{id}", updateRoleHandler)
-				r.Delete("/roles/{id}", deleteRoleHandler)
+				if cfg.AdminRolesHandler != nil {
+					cfg.AdminRolesHandler.RegisterRoutes(r)
+				} else {
+					// Fallback to placeholders
+					r.Get("/roles", listRolesHandler)
+					r.Post("/roles", createRoleHandler)
+					r.Get("/roles/{id}", getRoleHandler)
+					r.Patch("/roles/{id}", updateRoleHandler)
+					r.Delete("/roles/{id}", deleteRoleHandler)
+				}
 
-				r.Get("/permissions", listPermissionsHandler)
-				r.Post("/permissions", createPermissionHandler)
-
-				r.Get("/quotas", listQuotasHandler)
-				r.Post("/quotas", createQuotaHandler)
-				r.Get("/quotas/{id}", getQuotaHandler)
-				r.Patch("/quotas/{id}", updateQuotaHandler)
-				r.Delete("/quotas/{id}", deleteQuotaHandler)
+				if cfg.AdminQuotasHandler != nil {
+					cfg.AdminQuotasHandler.RegisterRoutes(r)
+				} else {
+					// Fallback to placeholders
+					r.Get("/quotas", listQuotasHandler)
+					r.Post("/quotas", createQuotaHandler)
+					r.Get("/quotas/{id}", getQuotaHandler)
+					r.Patch("/quotas/{id}", updateQuotaHandler)
+					r.Delete("/quotas/{id}", deleteQuotaHandler)
+				}
 
 				// Admin-only: revoke user sessions
 				r.Post("/users/{id}/revoke-sessions", cfg.AuthHandlers.RevokeUserSessions)
