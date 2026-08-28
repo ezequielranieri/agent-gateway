@@ -1,4 +1,4 @@
--- 0007_user_roles.up.sql
+-- +goose Up
 -- Create user_roles join table (tenanted, RLS FORCE)
 
 CREATE TABLE IF NOT EXISTS public.user_roles (
@@ -31,3 +31,5 @@ CREATE POLICY user_roles_tenant_isolation ON public.user_roles
     WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
 
 COMMENT ON TABLE public.user_roles IS 'User-role assignments per tenant (tenanted, RLS FORCE)';
+
+

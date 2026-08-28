@@ -32,10 +32,10 @@ func NewReviewRepository(pool *pgxpool.Pool) *ReviewRepository {
 	}
 }
 
-// hashToken computes SHA-256 hash of the opaque token
-func hashToken(token string) string {
+// hashToken computes SHA-256 hash of the opaque token as raw bytes
+func hashToken(token string) []byte {
 	hash := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(hash[:])
+	return hash[:]
 }
 
 // Create creates a new review request and returns the opaque token
@@ -43,7 +43,7 @@ func hashToken(token string) string {
 func (r *ReviewRepository) Create(ctx context.Context, req *domain.ReviewRequest) (*domain.ReviewRequest, string, error) {
 	// Generate opaque token (32 random bytes = 64 hex chars)
 	token := generateOpaqueToken()
-	tokenHash := hashToken(token)
+	tokenHash := hashToken(token) // []byte (32 bytes)
 
 	var created *domain.ReviewRequest
 	err := WithTenant(ctx, r.pool, req.TenantID, func(ctx context.Context) error {
@@ -51,8 +51,9 @@ func (r *ReviewRepository) Create(ctx context.Context, req *domain.ReviewRequest
 			TenantID:    uuid.UUID(req.TenantID),
 			RequesterID: uuid.UUID(req.RequesterID),
 			ReviewerID:  pgtype.UUID{}, // Optional
+			Action:      req.Action,
 			Payload:     json.RawMessage(req.Payload),
-			TokenHash:   []byte(tokenHash), // Store as bytea
+			TokenHash:   tokenHash, // Store as bytea (raw 32 bytes)
 			ExpiresAt:   req.ExpiresAt,
 		}
 
@@ -103,27 +104,32 @@ func (r *ReviewRepository) GetByID(ctx context.Context, tenantID domain.UUID, id
 }
 
 // GetByTokenHash retrieves a review request by token hash (cross-tenant lookup for approve/reject)
-func (r *ReviewRepository) GetByTokenHash(ctx context.Context, tokenHash string) (*domain.ReviewRequest, error) {
-	var review *domain.ReviewRequest
+func (r *ReviewRepository) GetByTokenHash(ctx context.Context, tokenHash []byte) (*domain.ReviewRequest, error) {
 	// We need to search across all tenants for the token hash
 	// This is used for approve/reject where the token is presented without tenant context
+	var review domain.ReviewRequest
+	var tokenHashBytes []byte
+	var decidedAt sql.NullTime
+	var decidedBy sql.NullString
+	var decisionReason sql.NullString
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, requester_id, reviewer_id, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
+		SELECT id, tenant_id, requester_id, reviewer_id, action, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
 		FROM public.review_requests
 		WHERE token_hash = $1
 		LIMIT 1
-	`, []byte(tokenHash)).Scan(
+	`, tokenHash).Scan(
 		&review.ID,
 		&review.TenantID,
 		&review.RequesterID,
 		&review.ReviewerID,
+		&review.Action,
 		&review.Payload,
 		&review.Status,
-		&review.TokenHash,
+		&tokenHashBytes,
 		&review.ExpiresAt,
-		&review.DecidedAt,
-		&review.DecidedBy,
-		&review.DecisionReason,
+		&decidedAt,
+		&decidedBy,
+		&decisionReason,
 		&review.CreatedAt,
 		&review.UpdatedAt,
 	)
@@ -133,7 +139,18 @@ func (r *ReviewRepository) GetByTokenHash(ctx context.Context, tokenHash string)
 		}
 		return nil, fmt.Errorf("failed to get review request by token hash: %w", err)
 	}
-	return review, nil
+	// token_hash is already stored as raw bytes, convert to hex for domain model
+	review.TokenHash = hex.EncodeToString(tokenHashBytes)
+	if review.DecidedAt != nil {
+		// DecidedAt is already set by the scan
+	}
+	if review.DecidedBy != nil {
+		// DecidedBy is already set by the scan
+	}
+	if review.DecisionReason != "" {
+		// DecisionReason is already set by the scan
+	}
+	return &review, nil
 }
 
 // UpdateStatus atomically updates the review status with row lock

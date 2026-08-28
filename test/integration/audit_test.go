@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -230,7 +231,8 @@ func testVerifyChainLargeChain(t *testing.T, auditRepo *pgadapter.AuditRepositor
 func testAdminAuditFilters(t *testing.T, router http.Handler, token string, logger zerolog.Logger) {
 	// Make some requests to generate audit events
 	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		body := `{"model":"test-model","messages":[{"role":"user","content":"test message"}]}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 

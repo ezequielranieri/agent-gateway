@@ -113,7 +113,8 @@ func CreateTestRouterWithRealGuardrails(t *testing.T, tc *TestContainer, logger 
 	// Create test tenant and user
 	tenantID := domain.NewUUID()
 	userID := domain.NewUUID()
-	roleID := domain.NewUUID()
+	// Use predefined admin role ID from seed migration (0013_seed)
+	roleID := domain.MustParseUUID("00000000-0000-0000-0000-000000000001")
 
 	err := SetupTestData(tc.Ctx, tc.DBPool, tenantID, userID, roleID)
 	require.NoError(t, err)
@@ -211,9 +212,10 @@ func CreateTestRouterWithRealGuardrails(t *testing.T, tc *TestContainer, logger 
 	localGuardrail := guardrail.NewLocalGuardrail(guardrailConfig, logger)
 
 	guardrailsMW := middleware.NewGuardrails(middleware.GuardrailsConfig{
-		Checker:   localGuardrail,
-		AuditRepo: auditRepo,
-		Logger:    logger,
+		Checker:       localGuardrail,
+		AuditRepo:     auditRepo,
+		ViolationRepo: pgadapter.NewGuardrailViolationRepository(tc.DBPool),
+		Logger:        logger,
 	})
 
 	hitlMW := middleware.NewHITL(middleware.HITLConfig{

@@ -1,4 +1,4 @@
--- 0002_super_admins.up.sql
+-- +goose Up
 -- Create super_admins table (global, NO RLS)
 
 CREATE TABLE IF NOT EXISTS public.super_admins (
@@ -13,3 +13,5 @@ CREATE INDEX IF NOT EXISTS idx_super_admins_email ON public.super_admins (email)
 
 COMMENT ON TABLE public.super_admins IS 'Global Super Admin accounts (platform level, no tenant_id)';
 COMMENT ON COLUMN public.super_admins.password_hash IS 'Argon2id PHC-encoded hash';
+
+

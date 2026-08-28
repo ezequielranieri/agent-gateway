@@ -1,4 +1,4 @@
--- 0009_refresh_tokens.up.sql
+-- +goose Up
 -- Create refresh_tokens table (GLOBAL, NO RLS per AD-009)
 -- Refresh tokens are global to support cross-tenant operations and family tracking
 -- No FK to users (composite PK) - referential integrity handled in application layer
@@ -31,3 +31,5 @@ COMMENT ON TABLE public.refresh_tokens IS 'Refresh tokens (global, NO RLS) - fam
 COMMENT ON COLUMN public.refresh_tokens.token_hash IS 'SHA-256 hash of the raw refresh token (never stored in plaintext)';
 COMMENT ON COLUMN public.refresh_tokens.family_id IS 'Groups rotated tokens; reuse detection revokes entire family';
 COMMENT ON COLUMN public.refresh_tokens.rotated_from IS 'Points to the previous token in the rotation chain';
+
+

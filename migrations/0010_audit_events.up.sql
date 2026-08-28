@@ -1,4 +1,4 @@
--- 0010_audit_events.up.sql
+-- +goose Up
 -- Create audit_events table (tenanted, RLS FORCE, append-only with hash chain)
 
 CREATE TABLE IF NOT EXISTS public.audit_events (
@@ -49,3 +49,5 @@ COMMENT ON COLUMN public.audit_events.seq IS 'Per-tenant monotonic sequence numb
 COMMENT ON COLUMN public.audit_events.prev_hash IS 'SHA-256 hash of previous event; NULL for first event in chain';
 COMMENT ON COLUMN public.audit_events.hash IS 'SHA-256(prev_hash || canonical_json(payload))';
 COMMENT ON COLUMN public.audit_events.payload IS 'Canonical JSON (sorted keys, no whitespace) for deterministic hashing';
+
+

@@ -32,12 +32,12 @@ import (
 
 // TestContainer holds the test containers and connections
 type TestContainer struct {
-	PGContainer     testcontainers.Container
-	RedisContainer  testcontainers.Container
-	DBPool          *pgxpool.Pool
-	RedisClient     *redis.Client
-	Ctx             context.Context
-	Cancel          context.CancelFunc
+	PGContainer    testcontainers.Container
+	RedisContainer testcontainers.Container
+	DBPool         *pgxpool.Pool
+	RedisClient    *redis.Client
+	Ctx            context.Context
+	Cancel         context.CancelFunc
 }
 
 // SetupTestContainers starts PostgreSQL and Redis containers and applies migrations
@@ -63,15 +63,20 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	)
 	require.NoError(t, err)
 
-	redisAddr, err := redisContainer.ConnectionString(ctx)
+	// Get Redis host:port (Endpoint returns "host:port" format)
+	redisEndpoint, err := redisContainer.Endpoint(ctx, "")
 	require.NoError(t, err)
+	redisAddr := redisEndpoint
 
 	// Connect to PostgreSQL
 	dbPool, err := pgxpool.New(ctx, pgDSN)
 	require.NoError(t, err)
 
-	// Apply migrations
-	err = ApplyMigrations(ctx, pgDSN)
+	// Increase pool size for concurrent tests
+	dbPool.Config().MaxConns = 50
+
+	// Apply migrations matching production schema
+	err = ApplyMigrations(ctx, dbPool)
 	require.NoError(t, err)
 
 	// Connect to Redis
@@ -90,90 +95,144 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	}
 }
 
-// Teardown cleans up the test containers
-func (tc *TestContainer) Teardown(t *testing.T) {
-	_ = tc.PGContainer.Terminate(tc.Ctx)
-	_ = tc.RedisContainer.Terminate(tc.Ctx)
-	tc.DBPool.Close()
-	tc.RedisClient.Close()
-	tc.Cancel()
-}
-
-// ApplyMigrations applies all database migrations
-func ApplyMigrations(ctx context.Context, dsn string) error {
-	conn, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
+// ApplyMigrations applies database schema matching production migrations
+func ApplyMigrations(ctx context.Context, dbPool *pgxpool.Pool) error {
 	migrations := []string{
+		// 0001_extensions
 		`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`,
 		`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`,
+		`CREATE EXTENSION IF NOT EXISTS "citext"`,
+
+		// 0002_super_admins
+		`CREATE TABLE IF NOT EXISTS public.super_admins (
+			id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			email        citext NOT NULL UNIQUE,
+			password_hash text   NOT NULL,
+			created_at   timestamptz NOT NULL DEFAULT now()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_super_admins_email ON public.super_admins (email)`,
+
+		// 0003_tenants
 		`CREATE TABLE IF NOT EXISTS public.tenants (
-			id UUID PRIMARY KEY,
-			name VARCHAR(255) NOT NULL,
-			status VARCHAR(50) NOT NULL DEFAULT 'active',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			name      varchar(255) NOT NULL,
+			status    varchar(50) NOT NULL DEFAULT 'active',
+			created_at timestamptz NOT NULL DEFAULT now()
 		)`,
-		`CREATE TABLE IF NOT EXISTS public.users (
-			id UUID PRIMARY KEY,
-			tenant_id UUID NOT NULL REFERENCES public.tenants(id),
-			email VARCHAR(255) NOT NULL,
-			password_hash VARCHAR(255) NOT NULL,
-			status VARCHAR(50) NOT NULL DEFAULT 'active',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE (tenant_id, email)
-		)`,
+
+		// 0004_roles
 		`CREATE TABLE IF NOT EXISTS public.roles (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			tenant_id UUID NOT NULL REFERENCES public.tenants(id),
-			name VARCHAR(100) NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE (tenant_id, name)
+			id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			name        varchar(100) NOT NULL,
+			description text,
+			created_at  timestamptz NOT NULL DEFAULT now()
 		)`,
+
+		// 0005_users
+		`CREATE TABLE IF NOT EXISTS public.users (
+			id            uuid NOT NULL DEFAULT gen_random_uuid(),
+			tenant_id     uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+			email         citext NOT NULL,
+			password_hash text   NOT NULL,
+			status        varchar(50) NOT NULL DEFAULT 'active',
+			created_at    timestamptz NOT NULL DEFAULT now(),
+			updated_at    timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (id, tenant_id)
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_users_tenant_email ON public.users (tenant_id, email)`,
+		`ALTER TABLE public.users ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE public.users FORCE ROW LEVEL SECURITY`,
+		`CREATE POLICY users_tenant_isolation ON public.users 
+			USING (tenant_id = current_setting('app.current_tenant', true)::uuid) 
+			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+
+		// 0006_role_permissions
+		`CREATE TABLE IF NOT EXISTS public.role_permissions (
+			tenant_id  uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+			role_id    uuid NOT NULL REFERENCES public.roles(id) ON DELETE CASCADE,
+			permission varchar(100) NOT NULL,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (tenant_id, role_id, permission)
+		)`,
+		`ALTER TABLE public.role_permissions ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE public.role_permissions FORCE ROW LEVEL SECURITY`,
+		`CREATE POLICY role_permissions_tenant_isolation ON public.role_permissions 
+			USING (tenant_id = current_setting('app.current_tenant', true)::uuid) 
+			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+
+		// 0007_user_roles
+		`CREATE TABLE IF NOT EXISTS public.user_roles (
+			tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+			user_id   uuid NOT NULL,
+			role_id   uuid NOT NULL REFERENCES public.roles(id) ON DELETE CASCADE,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (tenant_id, user_id, role_id)
+		)`,
+		`ALTER TABLE public.user_roles ADD CONSTRAINT fk_user_roles_user 
+			FOREIGN KEY (user_id, tenant_id) REFERENCES public.users (id, tenant_id) ON DELETE CASCADE`,
+		`ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE public.user_roles FORCE ROW LEVEL SECURITY`,
+		`CREATE POLICY user_roles_tenant_isolation ON public.user_roles 
+			USING (tenant_id = current_setting('app.current_tenant', true)::uuid) 
+			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+
+		// 0008_quotas
 		`CREATE TABLE IF NOT EXISTS public.quotas (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			tenant_id UUID NOT NULL REFERENCES public.tenants(id),
-			scope VARCHAR(50) NOT NULL,
-			scope_id UUID NOT NULL,
-			requests_per_min INT NOT NULL DEFAULT 60,
-			tokens_per_min INT NOT NULL DEFAULT 10000,
-			tool_execs_per_min INT NOT NULL DEFAULT 30,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE (tenant_id, scope, scope_id)
+			id                 uuid NOT NULL DEFAULT gen_random_uuid(),
+			tenant_id          uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+			scope              varchar(20) NOT NULL CHECK (scope IN ('tenant', 'user', 'role')),
+			scope_id           uuid NOT NULL,
+			requests_per_min   int NOT NULL DEFAULT 60,
+			tokens_per_min     int NOT NULL DEFAULT 10000,
+			tool_execs_per_min int NOT NULL DEFAULT 30,
+			created_at         timestamptz NOT NULL DEFAULT now(),
+			updated_at         timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (id, tenant_id)
 		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_quotas_tenant_scope ON public.quotas (tenant_id, scope, scope_id)`,
+		`ALTER TABLE public.quotas ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE public.quotas FORCE ROW LEVEL SECURITY`,
+		`CREATE POLICY quotas_tenant_isolation ON public.quotas 
+			USING (tenant_id = current_setting('app.current_tenant', true)::uuid) 
+			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+
+		// 0009_refresh_tokens
 		`CREATE TABLE IF NOT EXISTS public.refresh_tokens (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			user_id UUID NOT NULL REFERENCES public.users(id),
-			tenant_id UUID NOT NULL REFERENCES public.tenants(id),
-			token_hash VARCHAR(64) NOT NULL,
-			family_id UUID NOT NULL,
-			revoked BOOLEAN NOT NULL DEFAULT FALSE,
-			expires_at TIMESTAMPTZ NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			user_agent TEXT,
-			ip VARCHAR(45),
-			UNIQUE (token_hash)
+			id           uuid NOT NULL DEFAULT gen_random_uuid(),
+			user_id      uuid NOT NULL,
+			tenant_id    uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+			token_hash   varchar(64) NOT NULL,
+			family_id    uuid NOT NULL,
+			revoked      boolean NOT NULL DEFAULT false,
+			expires_at   timestamptz NOT NULL,
+			user_agent   text,
+			ip           varchar(45),
+			PRIMARY KEY (id, tenant_id)
 		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_refresh_tokens_hash ON public.refresh_tokens (token_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_family ON public.refresh_tokens (tenant_id, family_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON public.refresh_tokens (tenant_id, user_id)`,
+		`ALTER TABLE public.refresh_tokens ENABLE ROW LEVEL SECURITY`,
+		`ALTER TABLE public.refresh_tokens FORCE ROW LEVEL SECURITY`,
+		`CREATE POLICY refresh_tokens_tenant_isolation ON public.refresh_tokens 
+			USING (tenant_id = current_setting('app.current_tenant', true)::uuid) 
+			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+
+		// 0010_audit_events
 		`CREATE TABLE IF NOT EXISTS public.audit_events (
-			id UUID NOT NULL DEFAULT gen_random_uuid(),
-			tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
-			seq BIGINT NOT NULL,
-			actor_type TEXT NOT NULL CHECK (actor_type IN ('user', 'system', 'super_admin')),
-			actor_id UUID,
-			action TEXT NOT NULL,
-			entity_type TEXT,
-			entity_id UUID,
-			payload JSONB NOT NULL,
-			severity TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'warn', 'critical')),
-			prev_hash BYTEA,
-			hash BYTEA NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			id              uuid NOT NULL DEFAULT gen_random_uuid(),
+			tenant_id       uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+			seq             bigint NOT NULL,
+			actor_type      text NOT NULL CHECK (actor_type IN ('user', 'system', 'super_admin')),
+			actor_id        uuid,
+			action          text NOT NULL,
+			entity_type     text,
+			entity_id       uuid,
+			payload         jsonb NOT NULL,
+			severity        text NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'warn', 'critical')),
+			prev_hash       bytea,
+			hash            bytea NOT NULL,
+			created_at      timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (id, tenant_id)
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_events_tenant_seq ON public.audit_events (tenant_id, seq)`,
@@ -183,22 +242,27 @@ func ApplyMigrations(ctx context.Context, dsn string) error {
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_entity ON public.audit_events (tenant_id, entity_type, entity_id)`,
 		`ALTER TABLE public.audit_events ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE public.audit_events FORCE ROW LEVEL SECURITY`,
-		`CREATE POLICY audit_events_tenant_isolation ON public.audit_events USING (tenant_id = current_setting('app.current_tenant', true)::uuid) WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+		`CREATE POLICY audit_events_tenant_isolation ON public.audit_events 
+			USING (tenant_id = current_setting('app.current_tenant', true)::uuid) 
+			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
 		`REVOKE UPDATE, DELETE ON public.audit_events FROM PUBLIC`,
+
+		// 0011_review_requests
 		`CREATE TABLE IF NOT EXISTS public.review_requests (
-			id UUID NOT NULL DEFAULT gen_random_uuid(),
-			tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
-			requester_id UUID NOT NULL,
-			reviewer_id UUID,
-			payload JSONB NOT NULL,
-			status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED')),
-			token_hash BYTEA NOT NULL,
-			expires_at TIMESTAMPTZ NOT NULL,
-			decided_at TIMESTAMPTZ,
-			decided_by UUID,
-			decision_reason TEXT,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			id              uuid NOT NULL DEFAULT gen_random_uuid(),
+			tenant_id       uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+			requester_id    uuid NOT NULL,
+			reviewer_id     uuid,
+			action          text NOT NULL,
+			payload         jsonb NOT NULL,
+			status          text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED')),
+			token_hash      bytea NOT NULL,
+			expires_at      timestamptz NOT NULL,
+			decided_at      timestamptz,
+			decided_by      uuid,
+			decision_reason text,
+			created_at      timestamptz NOT NULL DEFAULT now(),
+			updated_at      timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (id, tenant_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_review_requests_token_hash ON public.review_requests (token_hash)`,
@@ -207,25 +271,43 @@ func ApplyMigrations(ctx context.Context, dsn string) error {
 		`CREATE INDEX IF NOT EXISTS idx_review_requests_reviewer ON public.review_requests (tenant_id, reviewer_id)`,
 		`ALTER TABLE public.review_requests ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE public.review_requests FORCE ROW LEVEL SECURITY`,
-		`CREATE POLICY review_requests_tenant_isolation ON public.review_requests USING (tenant_id = current_setting('app.current_tenant', true)::uuid) WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+		`CREATE POLICY review_requests_tenant_isolation ON public.review_requests 
+			USING (tenant_id = current_setting('app.current_tenant', true)::uuid) 
+			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+
+		// 0012_guardrail_violations
 		`CREATE TABLE IF NOT EXISTS public.guardrail_violations (
-			id UUID NOT NULL DEFAULT gen_random_uuid(),
-			tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
-			request_id UUID,
-			phase TEXT NOT NULL CHECK (phase IN ('input', 'output')),
-			rule_id TEXT NOT NULL,
-			severity TEXT NOT NULL CHECK (severity IN ('info', 'warn', 'critical')),
-			payload_excerpt JSONB,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			id              uuid NOT NULL DEFAULT gen_random_uuid(),
+			tenant_id       uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+			request_id      uuid,
+			direction       text NOT NULL CHECK (direction IN ('input', 'output')),
+			rule_id         text NOT NULL,
+			severity        text NOT NULL DEFAULT 'warn' CHECK (severity IN ('info', 'warn', 'critical')),
+			payload_excerpt text NOT NULL,
+			metadata        jsonb,
+			created_at      timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (id, tenant_id)
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_guardrail_violations_tenant_created ON public.guardrail_violations (tenant_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_guardrail_violations_rule ON public.guardrail_violations (tenant_id, rule_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_guardrail_violations_direction ON public.guardrail_violations (tenant_id, direction)`,
+		`CREATE INDEX IF NOT EXISTS idx_guardrail_violations_request ON public.guardrail_violations (tenant_id, request_id)`,
 		`ALTER TABLE public.guardrail_violations ENABLE ROW LEVEL SECURITY`,
 		`ALTER TABLE public.guardrail_violations FORCE ROW LEVEL SECURITY`,
-		`CREATE POLICY guardrail_violations_tenant_isolation ON public.guardrail_violations USING (tenant_id = current_setting('app.current_tenant', true)::uuid) WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+		`CREATE POLICY guardrail_violations_tenant_isolation ON public.guardrail_violations 
+			USING (tenant_id = current_setting('app.current_tenant', true)::uuid) 
+			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
+
+		// 0013_seed - default roles
+		`INSERT INTO public.roles (id, name, description) VALUES
+			('00000000-0000-0000-0000-000000000001', 'admin', 'Full administrative access within tenant'),
+			('00000000-0000-0000-0000-000000000002', 'operator', 'Standard operational access within tenant'),
+			('00000000-0000-0000-0000-000000000003', 'viewer', 'Read-only access within tenant')
+		ON CONFLICT (id) DO NOTHING`,
 	}
 
 	for _, migration := range migrations {
-		_, err := conn.Exec(ctx, migration)
+		_, err := dbPool.Exec(ctx, migration)
 		if err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}
@@ -234,7 +316,16 @@ func ApplyMigrations(ctx context.Context, dsn string) error {
 	return nil
 }
 
-// SetupTestData creates test tenant, user, and role
+// Teardown cleans up the test containers
+func (tc *TestContainer) Teardown(t *testing.T) {
+	_ = tc.PGContainer.Terminate(tc.Ctx)
+	_ = tc.RedisContainer.Terminate(tc.Ctx)
+	tc.DBPool.Close()
+	tc.RedisClient.Close()
+	tc.Cancel()
+}
+
+// SetupTestData creates test tenant, user, and role assignment
 func SetupTestData(ctx context.Context, dbPool *pgxpool.Pool, tenantID, userID, roleID domain.UUID) error {
 	_, err := dbPool.Exec(ctx, `
 		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Test Tenant', 'active')
@@ -247,16 +338,33 @@ func SetupTestData(ctx context.Context, dbPool *pgxpool.Pool, tenantID, userID, 
 	_, err = dbPool.Exec(ctx, `
 		INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
 		VALUES ($1, $2, 'test@example.com', 'hashed', 'active')
-		ON CONFLICT (id) DO NOTHING
+		ON CONFLICT (id, tenant_id) DO NOTHING
 	`, userID, tenantID)
 	if err != nil {
 		return err
 	}
 
+	// Roles are global catalog - use predefined role IDs from seed migration
+	// roleID should be one of: admin, operator, viewer (see 0013_seed)
+	// Assign role to user in this tenant via user_roles
 	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.roles (id, tenant_id, name) VALUES ($1, $2, 'admin')
-		ON CONFLICT (id) DO NOTHING
-	`, roleID, tenantID)
+		INSERT INTO public.user_roles (tenant_id, user_id, role_id) 
+		VALUES ($1, $2, $3)
+		ON CONFLICT (tenant_id, user_id, role_id) DO NOTHING
+	`, tenantID, userID, roleID)
+	if err != nil {
+		return err
+	}
+
+	// Insert high quota for testing (avoid rate limiting in tests)
+	_, err = dbPool.Exec(ctx, `
+		INSERT INTO public.quotas (tenant_id, scope, scope_id, requests_per_min, tokens_per_min, tool_execs_per_min)
+		VALUES ($1, 'tenant', '00000000-0000-0000-0000-000000000000', 10000, 1000000, 1000)
+		ON CONFLICT (tenant_id, scope, scope_id) DO UPDATE SET
+			requests_per_min = EXCLUDED.requests_per_min,
+			tokens_per_min = EXCLUDED.tokens_per_min,
+			tool_execs_per_min = EXCLUDED.tool_execs_per_min
+	`, tenantID)
 	if err != nil {
 		return err
 	}
@@ -269,7 +377,8 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 	// Create test tenant and user
 	tenantID := domain.NewUUID()
 	userID := domain.NewUUID()
-	roleID := domain.NewUUID()
+	// Use predefined admin role ID from seed migration (0013_seed)
+	roleID := domain.MustParseUUID("00000000-0000-0000-0000-000000000001") // admin role
 
 	err := SetupTestData(tc.Ctx, tc.DBPool, tenantID, userID, roleID)
 	require.NoError(t, err)
@@ -372,10 +481,12 @@ func GenerateTestToken(t *testing.T, jwtService *jwt.AuthService, userID, tenant
 
 // MakeRequest makes an HTTP request to the router
 func MakeRequest(router http.Handler, method, path, token string, body string) *httptest.ResponseRecorder {
+	// Use background context to avoid test runner deadline propagation
 	req := httptest.NewRequest(method, path, nil)
+	req = req.WithContext(context.Background())
 	if body != "" {
 		req = httptest.NewRequest(method, path, nil)
-		// We'll handle body separately
+		req = req.WithContext(context.Background())
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

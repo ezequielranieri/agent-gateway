@@ -30,7 +30,7 @@ type AuditConfig struct {
 func NewAudit(cfg AuditConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
+			_ = r.Context() // request context (not used for audit appends - fail-open)
 			logger := cfg.Logger.With().Str("middleware", "audit").Logger()
 
 			// Get context values
@@ -52,7 +52,8 @@ func NewAudit(cfg AuditConfig) func(http.Handler) http.Handler {
 
 			// Append pre-event (fail-open)
 			if cfg.Store != nil {
-				if err := cfg.Store.Append(ctx, preEvent); err != nil {
+				// Use background context for audit append - fail-open, shouldn't fail due to request deadline
+				if err := cfg.Store.Append(context.Background(), preEvent); err != nil {
 					logger.Warn().Err(err).Msg("Failed to append pre-request audit event")
 				}
 			}
@@ -92,7 +93,8 @@ func NewAudit(cfg AuditConfig) func(http.Handler) http.Handler {
 
 			// Append post-event (fail-open)
 			if cfg.Store != nil {
-				if err := cfg.Store.Append(ctx, postEvent); err != nil {
+				// Use background context for audit append - fail-open, shouldn't fail due to request deadline
+				if err := cfg.Store.Append(context.Background(), postEvent); err != nil {
 					logger.Warn().Err(err).Msg("Failed to append post-request audit event")
 				}
 			}

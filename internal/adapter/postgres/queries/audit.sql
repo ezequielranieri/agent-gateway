@@ -10,6 +10,9 @@ new_seq AS (
     SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq
     FROM public.audit_events
     WHERE tenant_id = $1
+),
+genesis AS (
+    SELECT '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea AS hash
 )
 INSERT INTO public.audit_events (tenant_id, seq, actor_type, actor_id, action, entity_type, entity_id, payload, severity, prev_hash, hash)
 SELECT
@@ -22,10 +25,11 @@ SELECT
     $6,
     $7,
     $8,
-    p.hash,
-    sha256(p.hash || $7) -- canonical_json is handled in application layer
+    COALESCE(p.hash, g.hash),
+    $9 -- pre-computed hash from application layer
 FROM new_seq ns
-CROSS JOIN prev p
+CROSS JOIN genesis g
+LEFT JOIN prev p ON true
 RETURNING id, tenant_id, seq, actor_type, actor_id, action, entity_type, entity_id, payload, severity, prev_hash, hash, created_at;
 
 -- name: GetAuditEvents :many

@@ -1,4 +1,4 @@
--- 0008_quotas.up.sql
+-- +goose Up
 -- Create quotas table (tenanted, RLS FORCE)
 
 CREATE TABLE IF NOT EXISTS public.quotas (
@@ -33,3 +33,5 @@ CREATE POLICY quotas_tenant_isolation ON public.quotas
 COMMENT ON TABLE public.quotas IS 'Rate limit quotas per tenant/user/role (tenanted, RLS FORCE)';
 COMMENT ON COLUMN public.quotas.scope IS 'Quota scope: tenant, user, or role';
 COMMENT ON COLUMN public.quotas.scope_id IS 'Reference ID: user_id for user scope, role_id for role scope, tenant_id for tenant scope';
+
+

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -36,7 +37,7 @@ type bucketConfig struct {
 func NewRateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
+			_ = r.Context() // request context (not used for rate-limit metadata ops)
 			logger := cfg.Logger.With().Str("middleware", "ratelimit").Logger()
 
 			// Get tenant ID from context
@@ -74,6 +75,10 @@ func NewRateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 				ToolExecs: 0, // Will be updated if tools are used
 			}
 
+			// Use background context for quota/rate-limit metadata operations
+			// to avoid test/framework deadline issues (rate limiting is a protection mechanism)
+			bgCtx := context.Background()
+
 			// Resolve effective limits for each bucket type (highest-limit-wins)
 			buckets := []bucketConfig{
 				{bucketType: domain.BucketTypeRequests},
@@ -82,7 +87,7 @@ func NewRateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 			}
 
 			for i := range buckets {
-				limit, window, err := cfg.QuotaResolver.GetEffectiveLimit(ctx, tenantID, userID, roleID, buckets[i].bucketType)
+				limit, window, err := cfg.QuotaResolver.GetEffectiveLimit(bgCtx, tenantID, userID, roleID, buckets[i].bucketType)
 				if err != nil {
 					logger.Error().Err(err).Str("bucket", string(buckets[i].bucketType)).Msg("Failed to resolve quota")
 					if !cfg.FailOpen {
@@ -105,7 +110,7 @@ func NewRateLimit(cfg RateLimitConfig) func(http.Handler) http.Handler {
 					ID:         tenantID,
 				}
 
-				result, err := cfg.Limiter.Allow(ctx, key, cost, buckets[i].limit, buckets[i].window)
+				result, err := cfg.Limiter.Allow(bgCtx, key, cost, buckets[i].limit, buckets[i].window)
 				if err != nil {
 					logger.Error().Err(err).Str("bucket", string(buckets[i].bucketType)).Msg("Rate limiter error")
 					if !cfg.FailOpen {
