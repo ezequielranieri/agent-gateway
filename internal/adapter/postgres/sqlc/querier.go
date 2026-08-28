@@ -11,7 +11,7 @@ import (
 )
 
 type Querier interface {
-	ApproveReviewRequest(ctx context.Context, arg ApproveReviewRequestParams) (ReviewRequest, error)
+	ApproveReviewRequest(ctx context.Context, arg ApproveReviewRequestParams) (ApproveReviewRequestRow, error)
 	AssignRolePermissions(ctx context.Context, arg AssignRolePermissionsParams) error
 	CreateAuditEvent(ctx context.Context, arg CreateAuditEventParams) (AuditEvent, error)
 	CreateGuardrailViolation(ctx context.Context, arg CreateGuardrailViolationParams) (GuardrailViolation, error)
@@ -28,7 +28,7 @@ type Querier interface {
 	GetQuotaByScope(ctx context.Context, arg GetQuotaByScopeParams) (Quota, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (RefreshToken, error)
 	GetReviewRequestByID(ctx context.Context, arg GetReviewRequestByIDParams) (ReviewRequest, error)
-	GetReviewRequestByTokenHash(ctx context.Context, tokenHash []byte) (ReviewRequest, error)
+	GetReviewRequestByTokenHash(ctx context.Context, tokenHash []byte) (GetReviewRequestByTokenHashRow, error)
 	GetRoleByID(ctx context.Context, id uuid.UUID) (Role, error)
 	GetRolePermissions(ctx context.Context, arg GetRolePermissionsParams) ([]string, error)
 	GetTenantByID(ctx context.Context, id uuid.UUID) (Tenant, error)
@@ -38,11 +38,11 @@ type Querier interface {
 	ListActiveRefreshTokens(ctx context.Context, arg ListActiveRefreshTokensParams) ([]RefreshToken, error)
 	ListGuardrailViolations(ctx context.Context, arg ListGuardrailViolationsParams) ([]GuardrailViolation, error)
 	ListQuotasByTenant(ctx context.Context, tenantID uuid.UUID) ([]Quota, error)
-	ListReviewRequests(ctx context.Context, arg ListReviewRequestsParams) ([]ReviewRequest, error)
+	ListReviewRequests(ctx context.Context, arg ListReviewRequestsParams) ([]ListReviewRequestsRow, error)
 	ListRolesByTenant(ctx context.Context, tenantID uuid.UUID) ([]Role, error)
 	ListTenants(ctx context.Context, arg ListTenantsParams) ([]Tenant, error)
 	ListUserSessions(ctx context.Context, arg ListUserSessionsParams) ([]ListUserSessionsRow, error)
-	RejectReviewRequest(ctx context.Context, arg RejectReviewRequestParams) (ReviewRequest, error)
+	RejectReviewRequest(ctx context.Context, arg RejectReviewRequestParams) (RejectReviewRequestRow, error)
 	RevokeAllUserSessions(ctx context.Context, arg RevokeAllUserSessionsParams) error
 	RevokeRefreshToken(ctx context.Context, id uuid.UUID) error
 	RevokeRefreshTokenFamily(ctx context.Context, familyID uuid.UUID) error

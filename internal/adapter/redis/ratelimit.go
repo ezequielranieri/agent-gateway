@@ -2,6 +2,8 @@ package redis
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -174,7 +176,7 @@ func (r *RedisQuotaResolver) GetEffectiveLimit(ctx context.Context, tenantID, us
 		if limit > maxLimit {
 			maxLimit = limit
 		}
-	} else if err != nil && err != domain.ErrNotFound {
+	} else if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, sql.ErrNoRows) {
 		r.logger.Error().Err(err).Str("tenant_id", tenantID.String()).Msg("Failed to get tenant quota")
 	}
 
@@ -186,7 +188,7 @@ func (r *RedisQuotaResolver) GetEffectiveLimit(ctx context.Context, tenantID, us
 			if limit > maxLimit {
 				maxLimit = limit
 			}
-		} else if err != nil && err != domain.ErrNotFound {
+		} else if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, sql.ErrNoRows) {
 			r.logger.Error().Err(err).Str("user_id", userID.String()).Msg("Failed to get user quota")
 		}
 	}
@@ -199,7 +201,7 @@ func (r *RedisQuotaResolver) GetEffectiveLimit(ctx context.Context, tenantID, us
 			if limit > maxLimit {
 				maxLimit = limit
 			}
-		} else if err != nil && err != domain.ErrNotFound {
+		} else if err != nil && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, sql.ErrNoRows) {
 			r.logger.Error().Err(err).Str("role_id", roleID.String()).Msg("Failed to get role quota")
 		}
 	}

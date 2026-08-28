@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -39,7 +40,7 @@ func (h *AdminAuditHandlers) RegisterRoutes(r chi.Router) {
 
 // ListAuditEvents handles GET /v1/admin/audit
 func (h *AdminAuditHandlers) ListAuditEvents(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	_ = r.Context() // request context (not used - admin query uses background context with timeout)
 	logger := h.logger.With().Str("method", "ListAuditEvents").Logger()
 
 	// Get tenant ID from context (admin must have tenant context)
@@ -129,8 +130,11 @@ func (h *AdminAuditHandlers) ListAuditEvents(w http.ResponseWriter, r *http.Requ
 		filter.Offset = offset
 	}
 
-	// Query audit events
-	events, err := h.auditRepo.Query(ctx, filter)
+	// Query audit events - use background context with timeout for admin query
+	queryCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	events, err := h.auditRepo.Query(queryCtx, filter)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to query audit events")
 		h.writeError(w, r, http.StatusInternalServerError, err)
@@ -150,7 +154,7 @@ func (h *AdminAuditHandlers) ListAuditEvents(w http.ResponseWriter, r *http.Requ
 
 // VerifyChain handles POST /v1/admin/audit/verify-chain
 func (h *AdminAuditHandlers) VerifyChain(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	_ = r.Context() // request context (not used - admin query uses background context with timeout)
 	logger := h.logger.With().Str("method", "VerifyChain").Logger()
 
 	// Get tenant ID from context
@@ -193,7 +197,9 @@ func (h *AdminAuditHandlers) VerifyChain(w http.ResponseWriter, r *http.Request)
 	}
 	if toSeq == 0 {
 		// Get last event to determine upper bound
-		lastEvent, err := h.auditRepo.GetLastEvent(ctx, targetTenantID)
+		queryCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		lastEvent, err := h.auditRepo.GetLastEvent(queryCtx, targetTenantID)
 		if err != nil {
 			logger.Error().Err(err).Msg("Failed to get last event")
 			h.writeError(w, r, http.StatusInternalServerError, err)
@@ -204,8 +210,10 @@ func (h *AdminAuditHandlers) VerifyChain(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// Verify chain
-	result, err := h.auditRepo.VerifyChain(ctx, targetTenantID, fromSeq, toSeq)
+	// Verify chain - use background context with timeout
+	queryCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := h.auditRepo.VerifyChain(queryCtx, targetTenantID, fromSeq, toSeq)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to verify chain")
 		h.writeError(w, r, http.StatusInternalServerError, err)

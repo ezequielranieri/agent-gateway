@@ -1,4 +1,4 @@
--- 0006_role_permissions.up.sql
+-- +goose Up
 -- Create role_permissions join table (tenanted, RLS FORCE)
 
 CREATE TABLE IF NOT EXISTS public.role_permissions (
@@ -25,3 +25,5 @@ CREATE POLICY role_permissions_tenant_isolation ON public.role_permissions
 
 COMMENT ON TABLE public.role_permissions IS 'Role-permission assignments per tenant (tenanted, RLS FORCE)';
 COMMENT ON COLUMN public.role_permissions.permission IS 'Permission in format recurso:accion (e.g., users:read, chat:write)';
+
+

@@ -49,9 +49,10 @@ func (r *QuotaRepository) Create(ctx context.Context, tenantID domain.UUID, quot
 }
 
 // GetByScope retrieves a quota by scope
+// Uses background context for metadata read to avoid request deadline issues
 func (r *QuotaRepository) GetByScope(ctx context.Context, tenantID domain.UUID, scope domain.QuotaScope, scopeID domain.UUID) (*domain.Quota, error) {
 	var quota *domain.Quota
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantBackground(ctx, r.pool, tenantID, func(ctx context.Context) error {
 		params := postgressqlc.GetQuotaByScopeParams{
 			TenantID: uuid.UUID(tenantID),
 			Scope:    string(scope),
@@ -81,9 +82,10 @@ func (r *QuotaRepository) GetByScope(ctx context.Context, tenantID domain.UUID, 
 }
 
 // ListByTenant lists all quotas for a tenant
+// Uses background context for metadata read to avoid request deadline issues
 func (r *QuotaRepository) ListByTenant(ctx context.Context, tenantID domain.UUID) ([]domain.Quota, error) {
 	var quotas []domain.Quota
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantBackground(ctx, r.pool, tenantID, func(ctx context.Context) error {
 		results, err := r.queries.ListQuotasByTenant(ctx, uuid.UUID(tenantID))
 		if err != nil {
 			return err

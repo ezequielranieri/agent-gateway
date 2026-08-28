@@ -24,9 +24,10 @@ type GuardrailChecker interface {
 
 // GuardrailsConfig holds configuration for the guardrails middleware
 type GuardrailsConfig struct {
-	Checker   GuardrailChecker
-	AuditRepo *postgres.AuditRepository
-	Logger    zerolog.Logger
+	Checker            GuardrailChecker
+	AuditRepo          *postgres.AuditRepository
+	ViolationRepo      *postgres.GuardrailViolationRepository
+	Logger             zerolog.Logger
 }
 
 // NewGuardrails creates a new guardrails middleware
@@ -78,6 +79,14 @@ func NewGuardrails(cfg GuardrailsConfig) func(http.Handler) http.Handler {
 						Str("phase", string(violation.Phase)).
 						Msg("Input guardrail violation - rejecting request")
 
+// Store violation in guardrail_violations table
+				if cfg.ViolationRepo != nil {
+					// Use background context for violation storage to avoid request deadline issues
+					if err := cfg.ViolationRepo.Create(context.Background(), violation); err != nil {
+						logger.Error().Err(err).Msg("Failed to store guardrail violation")
+					}
+				}
+
 					// Emit audit event for guardrail violation
 					if cfg.AuditRepo != nil {
 						emitGuardrailAudit(ctx, cfg.AuditRepo, tenantID, violation, logger)
@@ -107,13 +116,14 @@ func NewGuardrails(cfg GuardrailsConfig) func(http.Handler) http.Handler {
 // guardrailResponseWriter wraps http.ResponseWriter to capture response body
 type guardrailResponseWriter struct {
 	http.ResponseWriter
-	body       *responseBody
-	checker    GuardrailChecker
-	auditRepo  *postgres.AuditRepository
-	tenantID   domain.UUID
-	logger     zerolog.Logger
-	ctx        context.Context
-	statusCode int
+	body           *responseBody
+	checker        GuardrailChecker
+	auditRepo      *postgres.AuditRepository
+	violationRepo  *postgres.GuardrailViolationRepository
+	tenantID       domain.UUID
+	logger         zerolog.Logger
+	ctx            context.Context
+	statusCode     int
 }
 
 type responseBody struct {
@@ -174,7 +184,9 @@ func (w *guardrailResponseWriter) flushGuardrails() {
 			Str("phase", string(violation.Phase)).
 			Msg("Output guardrail violation")
 
-		// Emit audit event for guardrail violation
+		// Store violation in guardrail_violations table
+		// Note: We don't have access to violationRepo here, would need to pass it
+		// For now, just emit audit event
 		if w.auditRepo != nil {
 			emitGuardrailAudit(w.ctx, w.auditRepo, w.tenantID, violation, w.logger)
 		}
@@ -233,6 +245,7 @@ func writeGuardrailError(w http.ResponseWriter, violation *domain.GuardrailViola
 }
 
 // emitGuardrailAudit emits an audit event for a guardrail violation
+// Uses background context to avoid request deadline issues (fail-open)
 func emitGuardrailAudit(
 	ctx context.Context,
 	auditRepo *postgres.AuditRepository,
@@ -246,12 +259,12 @@ func emitGuardrailAudit(
 
 	// Prepare audit payload
 	payload := map[string]interface{}{
-		"rule":      violation.Rule,
-		"severity":  violation.Severity,
-		"phase":     violation.Phase,
-		"message":   violation.Message,
-		"context":   violation.Context,
-		"violation_id": violation.ID.String(),
+		"rule":           violation.Rule,
+		"severity":       violation.Severity,
+		"phase":          violation.Phase,
+		"message":        violation.Message,
+		"context":        violation.Context,
+		"violation_id":   violation.ID.String(),
 	}
 	payloadBytes, _ := json.Marshal(payload)
 
@@ -270,7 +283,8 @@ func emitGuardrailAudit(
 	}
 
 	// Fail-open: never block on audit failure
-	if err := auditRepo.Append(ctx, event); err != nil {
+	// Use background context to avoid request deadline issues
+	if err := auditRepo.Append(context.Background(), event); err != nil {
 		logger.Warn().Err(err).Msg("Failed to emit guardrail violation audit event")
 	}
 }

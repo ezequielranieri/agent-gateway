@@ -3,7 +3,7 @@
 
 # Database configuration
 database:
-  dsn: "postgres://gateway:gateway@localhost:5432/agent_gateway?sslmode=disable"
+  dsn: "postgres://gateway:gateway@localhost:5433/agent_gateway?sslmode=disable"
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: "30m"
@@ -13,7 +13,7 @@ database:
 
 # Redis configuration
 redis:
-  addr: "localhost:6379"
+  addr: "localhost:6380"
   password: ""
   db: 0
   pool_size: 20

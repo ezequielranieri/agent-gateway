@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -168,7 +169,7 @@ func (r *AuditRepository) doAppend(ctx context.Context, event *domain.AuditEvent
 
 	// Compute chain input and hash
 	chainInput := computeChainInput(prevHash, seq, event.TenantID, event.ActorUserID, event.Action, event.EntityType, event.EntityID, canonicalPayload, event.CreatedAt)
-	_ = sha256.Sum256([]byte(chainInput))
+	hashBytes := sha256.Sum256([]byte(chainInput))
 
 	// Prepare actor ID
 	var actorID pgtype.UUID
@@ -198,6 +199,7 @@ func (r *AuditRepository) doAppend(ctx context.Context, event *domain.AuditEvent
 		EntityID:   entityID,
 		Payload:    canonicalPayload,
 		Severity:   string(event.Severity),
+		Hash:       hashBytes[:],
 	}
 
 	created, err := r.queries.CreateAuditEvent(ctx, createParams)
@@ -339,14 +341,14 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 // VerifyChain verifies the hash chain for a tenant from fromSeq to toSeq
 func (r *AuditRepository) VerifyChain(ctx context.Context, tenantID domain.UUID, fromSeq, toSeq int64) (*VerifyResult, error) {
 	var result VerifyResult
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		query := `
 			SELECT id, tenant_id, seq, actor_type, actor_id, action, entity_type, entity_id, payload, severity, prev_hash, hash, created_at
 			FROM public.audit_events
 			WHERE tenant_id = $1 AND seq >= $2 AND seq <= $3
 			ORDER BY seq ASC
 		`
-		rows, err := r.pool.Query(ctx, query, uuid.UUID(tenantID), fromSeq, toSeq)
+		rows, err := tx.Query(ctx, query, uuid.UUID(tenantID), fromSeq, toSeq)
 		if err != nil {
 			return err
 		}

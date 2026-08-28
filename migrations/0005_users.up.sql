@@ -1,4 +1,4 @@
--- 0005_users.up.sql
+-- +goose Up
 -- Create users table (tenanted, RLS FORCE)
 
 CREATE TABLE IF NOT EXISTS public.users (
@@ -29,3 +29,5 @@ CREATE POLICY users_tenant_isolation ON public.users
 COMMENT ON TABLE public.users IS 'Users within a tenant (tenanted, RLS FORCE)';
 COMMENT ON COLUMN public.users.password_hash IS 'Argon2id PHC-encoded hash';
 COMMENT ON COLUMN public.users.status IS 'User status: active, suspended, or deleted';
+
+

@@ -1,7 +1,7 @@
 -- name: CreateReviewRequest :one
-INSERT INTO public.review_requests (tenant_id, requester_id, reviewer_id, payload, token_hash, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, tenant_id, requester_id, reviewer_id, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at;
+INSERT INTO public.review_requests (tenant_id, requester_id, reviewer_id, action, payload, token_hash, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, tenant_id, requester_id, reviewer_id, action, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at;
 
 -- name: GetReviewRequestByTokenHash :one
 SELECT id, tenant_id, requester_id, reviewer_id, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
@@ -10,7 +10,7 @@ WHERE token_hash = $1
 LIMIT 1;
 
 -- name: GetReviewRequestByID :one
-SELECT id, tenant_id, requester_id, reviewer_id, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
+SELECT id, tenant_id, requester_id, reviewer_id, action, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
 FROM public.review_requests
 WHERE tenant_id = $1 AND id = $2
 LIMIT 1;

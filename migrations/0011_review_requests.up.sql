@@ -1,4 +1,4 @@
--- 0011_review_requests.up.sql
+-- +goose Up
 -- Create review_requests table (tenanted, RLS FORCE)
 
 CREATE TABLE IF NOT EXISTS public.review_requests (
@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS public.review_requests (
     tenant_id       uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     requester_id    uuid NOT NULL, -- user_id who requested the review
     reviewer_id     uuid, -- user_id who will review (can be NULL for any admin)
+    action          text NOT NULL, -- e.g., "tool:execute", "model:call"
     payload         jsonb NOT NULL, -- The request data needing human approval
     status          text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED')),
     token_hash      bytea NOT NULL, -- SHA-256 hash of the opaque review token (returned once to requester)
@@ -39,3 +40,5 @@ CREATE POLICY review_requests_tenant_isolation ON public.review_requests
 COMMENT ON TABLE public.review_requests IS 'Human-in-the-Loop review requests (tenanted, RLS FORCE)';
 COMMENT ON COLUMN public.review_requests.token_hash IS 'SHA-256 hash of opaque token (returned once); timing-safe compare on approve/reject';
 COMMENT ON COLUMN public.review_requests.status IS 'State machine: PENDING -> APPROVED | REJECTED | EXPIRED (no other transitions)';
+
+

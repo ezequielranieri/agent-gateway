@@ -1,4 +1,4 @@
--- 0013_seed.sql
+-- +goose Up
 -- Seed data for default roles and SuperAdmin bootstrap helper
 
 -- Insert default roles (global catalog)
@@ -13,10 +13,11 @@ ON CONFLICT (name) DO NOTHING;
 -- Usage: SELECT * FROM bootstrap_super_admin('admin@example.com', '$argon2id$v=19$m=65536,t=1,p=4$...');
 -- Returns the created super_admin.id or NULL if already exists
 
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION bootstrap_super_admin(
     p_email citext,
     p_password_hash text
-) RETURNS uuid AS $$
+) RETURNS uuid AS $func$
 DECLARE
     v_id uuid;
 BEGIN
@@ -33,6 +34,9 @@ BEGIN
 
     RETURN v_id;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$func$ LANGUAGE plpgsql SECURITY DEFINER;
+-- +goose StatementEnd
 
 COMMENT ON FUNCTION bootstrap_super_admin(citext, text) IS 'Bootstrap helper: creates first Super Admin. Returns NULL if email already exists.';
+
+

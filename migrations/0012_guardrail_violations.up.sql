@@ -1,4 +1,4 @@
--- 0012_guardrail_violations.up.sql
+-- +goose Up
 -- Create guardrail_violations table (tenanted, RLS FORCE)
 
 CREATE TABLE IF NOT EXISTS public.guardrail_violations (
@@ -35,3 +35,5 @@ CREATE POLICY guardrail_violations_tenant_isolation ON public.guardrail_violatio
 COMMENT ON TABLE public.guardrail_violations IS 'Guardrail violations (tenanted, RLS FORCE)';
 COMMENT ON COLUMN public.guardrail_violations.direction IS 'Input (pre-router) or output (post-upstream)';
 COMMENT ON COLUMN public.guardrail_violations.rule_id IS 'Rule identifier (e.g., pii.email, injection.pattern1)';
+
+
