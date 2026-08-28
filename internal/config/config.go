@@ -1,10 +1,11 @@
 package config
 
 import (
+	"os"
+	"strings"
 	"time"
 
 	"github.com/knadh/koanf/parsers/yaml"
-	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/posflag"
 	"github.com/knadh/koanf/v2"
@@ -163,8 +164,8 @@ type (
 )
 
 // Load loads configuration from YAML file and environment variables
-// Environment variables use prefix "AG_" and replace dots with underscores
-// e.g., database.dsn -> AG_DATABASE_DSN
+// Environment variables use prefix "AG_" and map to nested keys
+// e.g., database.dsn -> AG_DATABASE_DSN, redis.addr -> AG_REDIS_ADDR
 func Load(configPath string) (*Config, error) {
 	k := koanf.New(".")
 
@@ -174,10 +175,27 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	// Load from environment variables with prefix AG_
-	if err := k.Load(env.Provider("AG_", ".", func(s string) string {
-		return s
-	}), nil); err != nil {
-		return nil, err
+	// Manually process AG_ env vars to avoid koanf v2 env provider issues
+	// AG_DATABASE_DSN -> database.dsn
+	// AG_REDIS_ADDR -> redis.addr
+	for _, e := range os.Environ() {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		val := parts[1]
+
+		if !strings.HasPrefix(key, "AG_") {
+			continue
+		}
+
+		// Strip AG_ prefix and convert to lowercase nested key
+		// AG_DATABASE_DSN -> database.dsn
+		// AG_REDIS_ADDR -> redis.addr
+		configKey := strings.ToLower(strings.TrimPrefix(key, "AG_"))
+		configKey = strings.ReplaceAll(configKey, "_", ".")
+		k.Set(configKey, val)
 	}
 
 	// Load from command line flags (for overriding specific values)
