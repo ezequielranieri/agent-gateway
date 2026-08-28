@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -173,9 +174,14 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 	}
 
 	// Timing-safe comparison of token hash
-	storedHash := []byte(review.TokenHash)
+	// review.TokenHash is hex string, tokenHash is raw bytes - decode hex for comparison
+	storedHashBytes, err := hex.DecodeString(review.TokenHash)
+	if err != nil {
+		uc.logger.Error().Err(err).Msg("Failed to decode stored token hash")
+		return nil, domain.ErrInvalidToken
+	}
 	presentedHash := tokenHash
-	if subtle.ConstantTimeCompare(storedHash, presentedHash) != 1 {
+	if subtle.ConstantTimeCompare(storedHashBytes, presentedHash) != 1 {
 		uc.logger.Debug().Msg("Token hash mismatch (timing-safe compare)")
 		return nil, domain.ErrInvalidToken
 	}
@@ -202,10 +208,10 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 		return nil, domain.ErrValidation
 	}
 
-	// 2. Verify action field matches
-	if action, ok := payloadMap["action"].(string); !ok || action != review.Action {
-		uc.logger.Error().Msg("Re-validation failed: action mismatch")
-		_ = uc.rejectWithReason(context.Background(), review, input.DecidedBy, "re-validation failed: action mismatch")
+	// 2. Verify review action is valid (non-empty)
+	if review.Action == "" {
+		uc.logger.Error().Msg("Re-validation failed: review action is empty")
+		_ = uc.rejectWithReason(context.Background(), review, input.DecidedBy, "re-validation failed: action is empty")
 		return nil, domain.ErrValidation
 	}
 

@@ -252,6 +252,7 @@ func CreateTestRouterWithRealGuardrails(t *testing.T, tc *TestContainer, logger 
 
 func makeRequest(router http.Handler, method, path, token, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, io.NopCloser(strings.NewReader(body)))
+	req = req.WithContext(context.Background())
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 

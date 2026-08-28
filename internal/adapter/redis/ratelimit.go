@@ -29,6 +29,20 @@ local window = tonumber(ARGV[2])
 local cost = tonumber(ARGV[3])
 local now = tonumber(ARGV[4])
 
+-- Validate inputs
+if not limit or limit <= 0 then
+    limit = 1000000  -- default fallback
+end
+if not window or window <= 0 then
+    window = 60  -- default 1 minute
+end
+if not cost or cost <= 0 then
+    cost = 1
+end
+if not now or now <= 0 then
+    now = tonumber(redis.call('TIME')[1]) * 1000 + tonumber(redis.call('TIME')[2]) / 1000
+end
+
 local ttl = window * 1000
 local emission_interval = ttl / limit
 local tat_key = key .. ":tat"
@@ -38,6 +52,9 @@ if tat == false then
 	tat = now
 else
 	tat = tonumber(tat)
+	if not tat then
+		tat = now
+	end
 end
 
 local new_tat = math.max(tat, now) + emission_interval * cost
@@ -47,7 +64,9 @@ local retry_after = 0
 
 if new_tat - now <= ttl + emission_interval then
 	allowed = 1
-	redis.call('SET', tat_key, new_tat, 'PX', ttl + emission_interval)
+	-- Ensure PX value is integer (Redis requires integer milliseconds)
+	local px_ttl = math.floor(ttl + emission_interval)
+	redis.call('SET', tat_key, new_tat, 'PX', px_ttl)
 	remaining = math.floor((ttl - (new_tat - now)) / emission_interval)
 	if remaining < 0 then remaining = 0 end
 	if remaining > limit then remaining = limit end

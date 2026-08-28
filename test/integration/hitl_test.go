@@ -108,6 +108,7 @@ func testCreateApproveExecuteFlow(t *testing.T, router http.Handler, token strin
 	createBody, _ := json.Marshal(createReq)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/reviews", strings.NewReader(string(createBody)))
+	req = req.WithContext(context.Background())
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
@@ -134,6 +135,7 @@ func testCreateApproveExecuteFlow(t *testing.T, router http.Handler, token strin
 	approveBody, _ := json.Marshal(approveReq)
 
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/reviews/"+reviewID+"/approve", strings.NewReader(string(approveBody)))
+	req2 = req2.WithContext(context.Background())
 	req2.Header.Set("Authorization", "Bearer "+token)
 	req2.Header.Set("Content-Type", "application/json")
 
@@ -151,6 +153,7 @@ func testCreateApproveExecuteFlow(t *testing.T, router http.Handler, token strin
 
 	// Step 3: Execute review (agent marks as executed)
 	req3 := httptest.NewRequest(http.MethodPatch, "/v1/reviews/"+reviewID, nil)
+	req3 = req3.WithContext(context.Background())
 	req3.Header.Set("Authorization", "Bearer "+token)
 	req3.Header.Set("Content-Type", "application/json")
 

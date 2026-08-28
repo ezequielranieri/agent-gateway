@@ -255,7 +255,7 @@ func ApplyMigrations(ctx context.Context, dbPool *pgxpool.Pool) error {
 			reviewer_id     uuid,
 			action          text NOT NULL,
 			payload         jsonb NOT NULL,
-			status          text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED')),
+			status          text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED', 'EXECUTED')),
 			token_hash      bytea NOT NULL,
 			expires_at      timestamptz NOT NULL,
 			decided_at      timestamptz,

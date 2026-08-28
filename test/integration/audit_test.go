@@ -233,6 +233,7 @@ func testAdminAuditFilters(t *testing.T, router http.Handler, token string, logg
 	for i := 0; i < 3; i++ {
 		body := `{"model":"test-model","messages":[{"role":"user","content":"test message"}]}`
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req = req.WithContext(context.Background())
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 
@@ -246,6 +247,7 @@ func testAdminAuditFilters(t *testing.T, router http.Handler, token string, logg
 
 	// Test filter by action
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/audit?action=POST%20/v1/chat/completions", nil)
+	req = req.WithContext(context.Background())
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	w := httptest.NewRecorder()
@@ -260,6 +262,7 @@ func testAdminAuditFilters(t *testing.T, router http.Handler, token string, logg
 
 	// Test filter by severity
 	req2 := httptest.NewRequest(http.MethodGet, "/v1/admin/audit?severity=info", nil)
+	req2 = req2.WithContext(context.Background())
 	req2.Header.Set("Authorization", "Bearer "+token)
 
 	w2 := httptest.NewRecorder()

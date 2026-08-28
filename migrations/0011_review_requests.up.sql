@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS public.review_requests (
     reviewer_id     uuid, -- user_id who will review (can be NULL for any admin)
     action          text NOT NULL, -- e.g., "tool:execute", "model:call"
     payload         jsonb NOT NULL, -- The request data needing human approval
-    status          text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED')),
+    status          text NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'EXPIRED', 'EXECUTED')),
     token_hash      bytea NOT NULL, -- SHA-256 hash of the opaque review token (returned once to requester)
     expires_at      timestamptz NOT NULL,
     decided_at      timestamptz,
