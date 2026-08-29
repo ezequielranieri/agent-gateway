@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
+	"github.com/ezequielranieri/agent-gateway/internal/domain/tool"
 )
 
 type (
@@ -27,6 +28,7 @@ type (
 		Server     ServerConfig     `koanf:"server"`
 		Router     model.RouterConfig `koanf:"router"`
 		Pricing    model.PricingConfig `koanf:"pricing"`
+		Tool       tool.ToolConfig    `koanf:"tool"`
 	}
 
 	// DatabaseConfig holds database connection settings
