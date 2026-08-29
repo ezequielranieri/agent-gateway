@@ -4,7 +4,7 @@
 
 Multi-tenant Agent Gateway / Control Plane for LLM agents — the **only path** between your application and the model. Every call authenticated, authorized, rate-limited, audited, and guarded.
 
-> Status: **MVP complete** — Phases 0-4 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails). Phases 5-8 (Model Routing, Tool Sandbox, External Classifier, CI/CD) deferred — see roadmap below.
+> Status: **MVP complete** — Phases 0-5 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**). Phases 6-8 (Tool Sandbox, External Classifier, CI/CD) deferred — see roadmap below.
 
 ## The problem
 
@@ -21,6 +21,7 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 - **Audit log that survives compromise**: Append-only PostgreSQL table with per-tenant hash chaining (`seq`, `prev_hash`, `chain_hash`), canonicalized JSON payloads, `VerifyChain` detector. Tampering leaves evidence.
 - **Human-in-the-Loop as a reusable service**: State machine in PostgreSQL + SSE streaming. Create approval request → human reviews via token → re-validate context → materialize. The same service for any write action across any agent.
 - **Guardrails as a domain interface**: `Guardrail` interface in `internal/domain/guardrail` — local implementation (regex, wordlist, PII patterns) ships by default; external classifier (Claude API, Llama Guard) plugs in as an adapter without touching domain logic.
+- **Model Routing with fallback & pricing**: `ModelProvider` port in `internal/domain/model` — OpenAI adapter (full), Anthropic/Ollama (stubbed), priority-based router, fallback chain with bounded retries + half-open circuit breaker, versioned pricing tables (provider+model → USD/1k tokens), pre-estimate/post-actual cost tracking integrated with rate-limit and audit.
 
 ## Architecture
 
@@ -29,9 +30,9 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 │                         HTTP Layer (chi)                            │
 │  router.go · middleware.go (auth, tenant, ratelimit, audit, hitl)   │
 └───────────────────────────▲───────────────────────────▲─────────────┘
-                            │                           │
-          ports.AuthService  │                    ports.Guardrail
-                            │                           │
+                             │                           │
+           ports.AuthService  │                    ports.Guardrail
+                             │                           │
 ┌───────────────────────────┴───────────────────────────┴─────────────┐
 │                      Application Layer (Use Cases)                 │
 │  services/gateway.go  — request pipeline, model routing            │
@@ -39,9 +40,10 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 │  services/audit.go     — append-only + hash chain                  │
 │  services/hitl.go      — approval state machine + SSE              │
 │  services/guardrail.go — input/output validation pipeline          │
+│  services/chat.go      — chat orchestration (pre-estimate → route) │
 │  ports/repositories.go · ports/services.go  (DIP: interfaces only) │
 └───────────────────────────▲───────────────────────────▲─────────────┘
-                            │                           │
+                             │                           │
 ┌───────────────────────────┴───────────────────────────┴─────────────┐
 │                    Infrastructure Layer (Adapters)                 │
 │  postgres/  (pgx, sqlc, RLS tenant sessions, audit chain)          │
@@ -50,6 +52,8 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 │  otel/      (OpenTelemetry stdout exporter + Prometheus /metrics)  │
 │  guardrail/ (LocalGuardrail — regex/wordlist/PII patterns)         │
 │  hitl/      (SSE handler + PG state machine)                       │
+│  provider/  (OpenAI, Anthropic, Ollama, Mock)                      │
+│  pricing/   (versioned price tables)                               │
 └─────────────────────────────────────────────────────────────────────┘
 
 Domain Layer (internal/domain): pure entities + sentinel errors, ZERO
@@ -62,8 +66,9 @@ cmd/
 ├── bootstrap/   CLI: creates first Super Admin + default tenant
 internal/
 ├── domain/           entities: Tenant, User, Role, Quota, AuditEvent, ReviewRequest, GuardrailViolation
-├── usecase/          application services (gateways, ratelimit, audit, hitl, guardrail)
-├── adapter/          postgres, redis, jwt, otel, guardrail, hitl
+│   └── model/        ModelProvider port, ChatRequest/Response, RouterConfig, PricingService, CircuitBreaker
+├── usecase/          application services (gateways, ratelimit, audit, hitl, guardrail, chat)
+├── adapter/          postgres, redis, jwt, otel, guardrail, hitl, provider, pricing
 ├── api/              OpenAPI 3.1 handlers (oapi-codegen generated)
 └── middleware/       chi middlewares: auth, tenant, ratelimit, audit, hitl
 migrations/           SQL schema + RLS policies + seed
@@ -204,7 +209,7 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 - [x] **Phase 2** — Audit log: append-only + hash chaining + VerifyChain
 - [x] **Phase 3** — HITL: state machine + SSE + re-validation + atomic approve
 - [x] **Phase 4** — Guardrails: domain interface + LocalGuardrail (regex/wordlist/PII)
-- [ ] **Phase 5** — Model routing: provider port + fallback + pricing abstraction
+- [x] **Phase 5** — Model routing: provider port + fallback chain + circuit breaker + pricing abstraction + OpenAI adapter
 - [ ] **Phase 6** — Tool sandbox: `ToolExecutor` interface + wazero WASM adapter
 - [ ] **Phase 7** — External guardrail classifier adapter
 - [ ] **Phase 8** — CI/CD pipeline + secret management + canary deploy
