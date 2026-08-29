@@ -17,6 +17,7 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/guardrail"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/pricing"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/tool/mock"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	redisadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
@@ -131,8 +132,21 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to initialize pricing service")
 	}
 
+	// Initialize tool executor (use mock for now, can switch to wazero)
+	toolExecutor := mock.NewMockExecutor(
+		mock.WithSupportedTools("echo_tool", "send_email", "query_db"),
+		mock.WithLatency(10*time.Millisecond),
+	)
+
 	// Initialize chat usecase
-	chatUC, err := chat.BuildChatUsecaseFromConfig(context.Background(), cfg.Router, pricingService, logger)
+	chatUC, err := chat.BuildChatUsecaseFromConfig(
+		context.Background(),
+		cfg.Router,
+		&cfg.Tool,
+		toolExecutor,
+		pricingService,
+		logger,
+	)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize chat usecase")
 	}

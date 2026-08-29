@@ -21,13 +21,14 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/provider/mock"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/pricing"
-	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
+	toolMock "github.com/ezequielranieri/agent-gateway/internal/adapter/tool/mock"
 	pgadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	redisadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
 	"github.com/ezequielranieri/agent-gateway/internal/api/handlers"
 	"github.com/ezequielranieri/agent-gateway/internal/config"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
+	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/auth"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/chat"
@@ -449,10 +450,26 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 	
 	mockRouter := chat.NewRouter(mockRegistry, logger)
 	mockFallbackChain := chat.NewFallbackChain(mockRouter, mockPricing, model.RouterConfig{}, logger)
-	mockChatUC := chat.NewChatUsecase(mockFallbackChain, mockPricing, mockRouter, chat.ChatUsecaseConfig{
-		DefaultTimeout: 30 * time.Second,
-		EnableCostTracking: true,
-	}, logger)
+	
+	// Create mock tool executor for tests
+	mockToolExecutor := toolMock.NewMockExecutor(
+		toolMock.WithSupportedTools("echo_tool", "send_email", "query_db"),
+		toolMock.WithLatency(10 * time.Millisecond),
+	)
+	
+	mockChatUC := chat.NewChatUsecase(
+		mockFallbackChain,
+		mockPricing,
+		mockRouter,
+		mockToolExecutor,
+		nil, // tool config (nil for tests)
+		chat.ChatUsecaseConfig{
+			DefaultTimeout: 30 * time.Second,
+			EnableCostTracking: true,
+			MaxIterations: 5,
+		},
+		logger,
+	)
 	
 	chatHandlers := handlers.NewChatHandlers(logger, mockChatUC)
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)

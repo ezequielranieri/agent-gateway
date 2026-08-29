@@ -18,9 +18,10 @@ import (
 
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/guardrail"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
-	"github.com/ezequielranieri/agent-gateway/internal/adapter/provider/mock"
+	providerMock "github.com/ezequielranieri/agent-gateway/internal/adapter/provider/mock"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/pricing"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/tool/mock"
 	pgadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
 	"github.com/ezequielranieri/agent-gateway/internal/api/handlers"
@@ -150,12 +151,12 @@ func CreateTestRouterWithRealGuardrails(t *testing.T, tc *TestContainer, logger 
 	authHandlers := handlers.NewAuthHandlers(authUC, nil, logger)
 	
 	// Initialize mock chat usecase for tests
-	mockProvider := mock.NewProvider(
-		mock.WithName("test-mock"),
-		mock.WithModels([]string{"gpt-4o-mini", "gpt-4", "test-model"}),
-		mock.WithEnabled(true),
+	providerMockProvider := providerMock.NewProvider(
+		providerMock.WithName("test-mock"),
+		providerMock.WithModels([]string{"gpt-4o-mini", "gpt-4", "test-model"}),
+		providerMock.WithEnabled(true),
 	)
-	mockProvider.SetFixedLatency(10 * time.Millisecond)
+	providerMockProvider.SetFixedLatency(10 * time.Millisecond)
 	
 	testPriceTable := &pricing.PriceTable{
 		Version:  "test",
@@ -179,14 +180,30 @@ func CreateTestRouterWithRealGuardrails(t *testing.T, tc *TestContainer, logger 
 		Models:    []string{"gpt-4o-mini", "gpt-4", "test-model"},
 		Timeout:   30 * time.Second,
 		MaxRetries: 2,
-	}, mockProvider)
+	}, providerMockProvider)
 	
 	mockRouter := chat.NewRouter(mockRegistry, logger)
 	mockFallbackChain := chat.NewFallbackChain(mockRouter, mockPricing, model.RouterConfig{}, logger)
-	mockChatUC := chat.NewChatUsecase(mockFallbackChain, mockPricing, mockRouter, chat.ChatUsecaseConfig{
-		DefaultTimeout: 30 * time.Second,
-		EnableCostTracking: true,
-	}, logger)
+	
+	// Create mock tool executor for tests
+	mockToolExecutor := mock.NewMockExecutor(
+		mock.WithSupportedTools("echo_tool", "send_email", "query_db"),
+		mock.WithLatency(10 * time.Millisecond),
+	)
+	
+	mockChatUC := chat.NewChatUsecase(
+		mockFallbackChain,
+		mockPricing,
+		mockRouter,
+		mockToolExecutor,
+		nil, // tool config (nil for tests)
+		chat.ChatUsecaseConfig{
+			DefaultTimeout: 30 * time.Second,
+			EnableCostTracking: true,
+			MaxIterations: 5,
+		},
+		logger,
+	)
 	
 	chatHandlers := handlers.NewChatHandlers(logger, mockChatUC)
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)

@@ -2,10 +2,12 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
+	"github.com/ezequielranieri/agent-gateway/internal/domain/tool"
 	"github.com/rs/zerolog"
 )
 
@@ -13,6 +15,9 @@ import (
 type ChatUsecaseConfig struct {
 	DefaultTimeout    time.Duration
 	EnableCostTracking bool
+	MaxIterations     int
+	ToolExecutor      tool.ToolExecutor
+	ToolConfig        *tool.ToolConfig
 }
 
 // ChatUsecase orchestrates the chat completion flow: pre-estimate -> route -> post-actual
@@ -20,6 +25,8 @@ type ChatUsecase struct {
 	fallbackChain   *FallbackChain
 	pricing         model.PricingService
 	router          *Router
+	toolExecutor    tool.ToolExecutor
+	toolConfig      *tool.ToolConfig
 	config          ChatUsecaseConfig
 	logger          zerolog.Logger
 }
@@ -51,19 +58,26 @@ func NewChatUsecase(
 	fallbackChain *FallbackChain,
 	pricing model.PricingService,
 	router *Router,
+	toolExecutor tool.ToolExecutor,
+	toolConfig *tool.ToolConfig,
 	config ChatUsecaseConfig,
 	logger zerolog.Logger,
 ) *ChatUsecase {
 	if config.DefaultTimeout <= 0 {
 		config.DefaultTimeout = 30 * time.Second
 	}
+	if config.MaxIterations <= 0 {
+		config.MaxIterations = 5
+	}
 	
 	return &ChatUsecase{
-		fallbackChain:    fallbackChain,
-		pricing:          pricing,
-		router:           router,
-		config:           config,
-		logger:           logger.With().Str("component", "chat_usecase").Logger(),
+		fallbackChain:   fallbackChain,
+		pricing:         pricing,
+		router:          router,
+		toolExecutor:    toolExecutor,
+		toolConfig:      toolConfig,
+		config:          config,
+		logger:          logger.With().Str("component", "chat_usecase").Logger(),
 	}
 }
 
@@ -99,7 +113,7 @@ func (uc *ChatUsecase) Complete(ctx context.Context, req ChatRequest) (ChatRespo
 		Str("pricing_version", preEstimateVersion).
 		Msg("Pre-estimate cost")
 	
-	// Execute with fallback chain
+	// Execute with fallback chain (initial call)
 	result, err := uc.fallbackChain.ExecuteWithFallback(ctx, domainReq)
 	if err != nil {
 		uc.logger.Error().
@@ -109,8 +123,18 @@ func (uc *ChatUsecase) Complete(ctx context.Context, req ChatRequest) (ChatRespo
 		return ChatResponse{}, err
 	}
 	
+	// Execute tool loop if there are tool calls
+	finalResult, err := uc.executeToolLoop(ctx, domainReq, result)
+	if err != nil {
+		uc.logger.Error().
+			Err(err).
+			Dur("latency", time.Since(startTime)).
+			Msg("Tool loop execution failed")
+		return ChatResponse{}, err
+	}
+	
 	// Post-actual cost calculation
-	actualCost, actualVersion, err := uc.calculateActualCost(ctx, result.Completion)
+	actualCost, actualVersion, err := uc.calculateActualCost(ctx, finalResult.Completion)
 	if err != nil {
 		uc.logger.Warn().Err(err).Msg("Actual cost calculation failed")
 	}
@@ -118,22 +142,22 @@ func (uc *ChatUsecase) Complete(ctx context.Context, req ChatRequest) (ChatRespo
 	totalLatency := time.Since(startTime)
 	
 	response := ChatResponse{
-		Completion:   result.Completion,
+		Completion:   finalResult.Completion,
 		CostUSD:      actualCost,
 		CostVersion:  actualVersion,
-		Provider:     result.Provider,
+		Provider:     finalResult.Provider,
 		LatencyMs:    totalLatency.Milliseconds(),
-		Retried:      result.Retried,
+		Retried:      finalResult.Retried,
 	}
 	
 	uc.logger.Info().
-		Str("provider", result.Provider).
-		Str("model", result.Completion.Model).
+		Str("provider", finalResult.Provider).
+		Str("model", finalResult.Completion.Model).
 		Int64("latency_ms", totalLatency.Milliseconds()).
 		Float64("cost_usd", actualCost).
 		Str("cost_version", actualVersion).
-		Bool("retried", result.Retried).
-		Int("attempt", result.Attempt).
+		Bool("retried", finalResult.Retried).
+		Int("attempt", finalResult.Attempt).
 		Msg("Chat completion successful")
 	
 	return response, nil
@@ -154,6 +178,181 @@ func (uc *ChatUsecase) estimateCost(ctx context.Context, req ChatRequest) (float
 func (uc *ChatUsecase) calculateActualCost(ctx context.Context, completion model.Completion) (float64, string, error) {
 	usage := completion.Response.Usage
 	return uc.pricing.GetCost(ctx, completion.Model, usage.PromptTokens, usage.CompletionTokens)
+}
+
+// executeToolLoop executes tool calls in a bounded loop
+func (uc *ChatUsecase) executeToolLoop(
+	ctx context.Context,
+	req model.ChatRequest,
+	result FallbackResult,
+) (FallbackResult, error) {
+	if uc.toolExecutor == nil || uc.toolConfig == nil {
+		uc.logger.Debug().Msg("No tool executor configured, skipping tool loop")
+		return result, nil
+	}
+
+	maxIterations := uc.config.MaxIterations
+	if maxIterations <= 0 {
+		maxIterations = 5
+	}
+
+	currentResult := result
+	iterations := 0
+
+	for iterations < maxIterations {
+		// Check for tool calls in the response
+		if len(currentResult.Completion.Response.Choices) == 0 {
+			break
+		}
+
+		choice := currentResult.Completion.Response.Choices[0]
+		toolCalls := choice.Message.ToolCalls
+		if len(toolCalls) == 0 {
+			break // No tool calls, we're done
+		}
+
+		iterations++
+		uc.logger.Info().
+			Int("iteration", iterations).
+			Int("tool_calls", len(toolCalls)).
+			Msg("Executing tool loop iteration")
+
+		// Execute each tool call
+		var toolResults []tool.ToolResult
+		for _, tc := range toolCalls {
+			// Check HITL gate
+			if uc.toolRequiresApproval(tc.Function.Name) {
+approved, err := uc.requestHITLApproval(ctx, tc)
+				if err != nil || !approved {
+					toolResults = append(toolResults, tool.ToolResult{
+						CallID: tc.ID,
+						Error:  fmt.Sprintf("HITL approval failed: %v", err),
+					})
+					continue
+				}
+			}
+
+// Execute tool
+		call := tool.ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: parseArguments(tc.Function.Arguments),
+		}
+
+		var toolResult tool.ToolResult
+		var execErr error
+		toolResult, execErr = uc.toolExecutor.Execute(ctx, call)
+		if execErr != nil {
+			uc.logger.Error().
+				Err(execErr).
+				Str("tool", tc.Function.Name).
+				Msg("Tool execution failed")
+			toolResult = tool.ToolResult{
+				CallID:   call.ID,
+				Error:    execErr.Error(),
+				Duration: 0,
+			}
+		}
+
+		// Record per-step: cost, audit, rate-limit
+		uc.recordToolStep(ctx, toolResult, tc)
+
+		toolResults = append(toolResults, toolResult)
+	}
+
+	// Feed results back and make next call
+	var feedErr error
+	currentResult, feedErr = uc.feedToolResultsAndRecall(ctx, req, currentResult, toolResults)
+	if feedErr != nil {
+		return FallbackResult{}, fmt.Errorf("feed tool results: %w", feedErr)
+	}
+}
+
+	if iterations >= maxIterations {
+		uc.logger.Warn().
+			Int("max_iterations", maxIterations).
+			Msg("Max iterations reached")
+		// Add finish reason to last completion
+		if len(currentResult.Completion.Response.Choices) > 0 {
+			currentResult.Completion.Response.Choices[0].FinishReason = "max_iterations"
+		}
+	}
+
+	return currentResult, nil
+}
+
+// toolRequiresApproval checks if a tool requires HITL approval
+func (uc *ChatUsecase) toolRequiresApproval(toolName string) bool {
+	if uc.toolConfig == nil {
+		return false
+	}
+	for _, tc := range uc.toolConfig.Tools {
+		if tc.Name == toolName {
+			return tc.RequiresApproval
+		}
+	}
+	return false
+}
+
+// requestHITLApproval requests human approval for a tool call
+func (uc *ChatUsecase) requestHITLApproval(ctx context.Context, tc model.ToolCall) (bool, error) {
+	uc.logger.Info().
+		Str("tool", tc.Function.Name).
+		Msg("Tool requires HITL approval")
+
+	// For now, return false to indicate not approved
+	// In a real implementation, this would create a review request and wait for approval
+	return false, fmt.Errorf("HITL approval required for %s", tc.Function.Name)
+}
+
+// recordToolStep records cost, audit, and rate-limit for a tool step
+func (uc *ChatUsecase) recordToolStep(ctx context.Context, result tool.ToolResult, tc model.ToolCall) {
+	// Record rate-limit ToolExecs (1 per tool call)
+	// This would be called on the rate limiter
+	uc.logger.Debug().
+		Str("tool", tc.Function.Name).
+		Str("call_id", tc.ID).
+		Msg("Recording tool step")
+
+	// TODO: Integrate with rate limiter, audit, and pricing
+	_ = result
+	_ = tc
+}
+
+// feedToolResultsAndRecall feeds tool results back to the model and makes next call
+func (uc *ChatUsecase) feedToolResultsAndRecall(
+	ctx context.Context,
+	originalReq model.ChatRequest,
+	currentResult FallbackResult,
+	toolResults []tool.ToolResult,
+) (FallbackResult, error) {
+	// Build new messages with tool results
+	messages := make([]model.Message, len(originalReq.Messages))
+	copy(messages, originalReq.Messages)
+
+	for _, tr := range toolResults {
+		messages = append(messages, model.Message{
+			Role:       "tool",
+			Content:    fmt.Sprintf("%v", tr.Output),
+			ToolCallID: tr.CallID,
+			Name:       tr.CallID, // Using call ID as name for now
+		})
+	}
+
+	// Create new request with tool results
+	newReq := model.ChatRequest{
+		Model:       originalReq.Model,
+		Messages:    messages,
+		Temperature: originalReq.Temperature,
+		MaxTokens:   originalReq.MaxTokens,
+		Stream:      originalReq.Stream,
+		Tools:       originalReq.Tools,
+		ToolChoice:  originalReq.ToolChoice,
+		User:        originalReq.User,
+	}
+
+	// Execute with fallback chain
+	return uc.fallbackChain.ExecuteWithFallback(ctx, newReq)
 }
 
 // GetRouter returns the router for external access
@@ -185,6 +384,8 @@ func (uc *ChatUsecase) GetProviderStats() map[string]ProviderStats {
 func BuildChatUsecaseFromConfig(
 	ctx context.Context,
 	cfg model.RouterConfig,
+	toolCfg *tool.ToolConfig,
+	toolExecutor tool.ToolExecutor,
 	pricing model.PricingService,
 	logger zerolog.Logger,
 ) (*ChatUsecase, error) {
@@ -205,9 +406,14 @@ func BuildChatUsecaseFromConfig(
 		fallbackChain,
 		pricing,
 		router,
+		toolExecutor,
+		toolCfg,
 		ChatUsecaseConfig{
 			DefaultTimeout:    cfg.DefaultTimeout,
 			EnableCostTracking: true,
+			MaxIterations:     toolCfg.MaxIterations,
+			ToolExecutor:      toolExecutor,
+			ToolConfig:        toolCfg,
 		},
 		logger,
 	)
@@ -216,4 +422,16 @@ func BuildChatUsecaseFromConfig(
 	registry.StartPeriodicHealthChecks(ctx, 30*time.Second)
 	
 	return usecase, nil
+}
+
+// parseArguments parses a JSON string into a map
+func parseArguments(s string) map[string]any {
+	if s == "" {
+		return nil
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(s), &result); err != nil {
+		return nil
+	}
+	return result
 }
