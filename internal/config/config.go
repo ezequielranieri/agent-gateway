@@ -10,6 +10,8 @@ import (
 	"github.com/knadh/koanf/providers/posflag"
 	"github.com/knadh/koanf/v2"
 	"github.com/spf13/pflag"
+
+	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
 )
 
 type (
@@ -23,6 +25,8 @@ type (
 		HITL       HITLConfig       `koanf:"hitl"`
 		OTel       OTelConfig       `koanf:"otel"`
 		Server     ServerConfig     `koanf:"server"`
+		Router     model.RouterConfig `koanf:"router"`
+		Pricing    model.PricingConfig `koanf:"pricing"`
 	}
 
 	// DatabaseConfig holds database connection settings

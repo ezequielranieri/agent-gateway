@@ -134,3 +134,109 @@ server:
   write_timeout: "30s"
   idle_timeout: "120s"
   shutdown_timeout: "10s"
+
+# Router configuration (Model Routing Phase 5)
+router:
+  providers:
+    - name: "openai-primary"
+      type: "openai"
+      models: ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
+      priority: 1
+      enabled: true
+      api_key: "${OPENAI_API_KEY}"
+      timeout: "30s"
+      max_retries: 2
+      circuit_breaker:
+        enabled: true
+        failure_threshold: 5
+        success_threshold: 2
+        timeout: "30s"
+        half_open_max_requests: 3
+    - name: "anthropic-fallback"
+      type: "anthropic"
+      models: ["claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"]
+      priority: 2
+      enabled: false
+      api_key: "${ANTHROPIC_API_KEY}"
+      timeout: "30s"
+      max_retries: 2
+      circuit_breaker:
+        enabled: true
+        failure_threshold: 5
+        success_threshold: 2
+        timeout: "30s"
+        half_open_max_requests: 3
+    - name: "ollama-local"
+      type: "ollama"
+      models: ["llama3", "mistral", "codellama"]
+      priority: 3
+      enabled: false
+      base_url: "http://localhost:11434"
+      timeout: "60s"
+      max_retries: 1
+      circuit_breaker:
+        enabled: true
+        failure_threshold: 3
+        success_threshold: 2
+        timeout: "60s"
+        half_open_max_requests: 2
+  fallback_rules:
+    - on_errors: ["provider unavailable", "provider timeout"]
+      max_retries: 2
+      backoff: "100ms"
+    - on_errors: ["provider rate limited"]
+      max_retries: 3
+      backoff: "1s"
+    - on_errors: ["provider authentication failed"]
+      max_retries: 0  # Don't retry auth failures
+  default_timeout: "30s"
+  max_retries: 2
+  enable_circuit_breaker: true
+
+# Pricing configuration (Model Routing Phase 5)
+pricing:
+  default_version: "2024-01"
+  auto_update: false
+  tables:
+    - version: "2024-01"
+      provider: "openai"
+      effective_date: "2024-01-01"
+      description: "OpenAI pricing as of January 2024"
+      prices:
+        - model: "gpt-4"
+          input_price_per_1k: 0.03
+          output_price_per_1k: 0.06
+        - model: "gpt-4-turbo"
+          input_price_per_1k: 0.01
+          output_price_per_1k: 0.03
+        - model: "gpt-3.5-turbo"
+          input_price_per_1k: 0.0005
+          output_price_per_1k: 0.0015
+    - version: "2024-01"
+      provider: "anthropic"
+      effective_date: "2024-01-01"
+      description: "Anthropic pricing as of January 2024"
+      prices:
+        - model: "claude-3-opus-20240229"
+          input_price_per_1k: 0.015
+          output_price_per_1k: 0.075
+        - model: "claude-3-sonnet-20240229"
+          input_price_per_1k: 0.003
+          output_price_per_1k: 0.015
+        - model: "claude-3-haiku-20240307"
+          input_price_per_1k: 0.00025
+          output_price_per_1k: 0.00125
+    - version: "2024-01"
+      provider: "ollama"
+      effective_date: "2024-01-01"
+      description: "Ollama local models (zero cost)"
+      prices:
+        - model: "llama3"
+          input_price_per_1k: 0.0
+          output_price_per_1k: 0.0
+        - model: "mistral"
+          input_price_per_1k: 0.0
+          output_price_per_1k: 0.0
+        - model: "codellama"
+          input_price_per_1k: 0.0
+          output_price_per_1k: 0.0

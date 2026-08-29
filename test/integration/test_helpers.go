@@ -19,6 +19,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/provider/mock"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/pricing"
+	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
 	pgadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	redisadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
@@ -27,6 +30,7 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/auth"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/chat"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/hitl"
 )
 
@@ -408,7 +412,49 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 
 	// Initialize handlers
 	authHandlers := handlers.NewAuthHandlers(authUC, nil, logger)
-	chatHandlers := handlers.NewChatHandlers(logger)
+	
+	// Initialize mock chat usecase for tests
+	mockProvider := mock.NewProvider(
+		mock.WithName("test-mock"),
+		mock.WithModels([]string{"gpt-4o-mini", "gpt-4", "test-model"}),
+		mock.WithEnabled(true),
+	)
+	mockProvider.SetFixedLatency(10 * time.Millisecond)
+	
+	// Create test pricing service
+	testPriceTable := &pricing.PriceTable{
+		Version:  "test",
+		Provider: "mock",
+		Prices: []pricing.ModelPriceEntry{
+			{Model: "gpt-4o-mini", InputPricePer1k: 0.00015, OutputPricePer1k: 0.0006},
+			{Model: "gpt-4", InputPricePer1k: 0.03, OutputPricePer1k: 0.06},
+			{Model: "test-model", InputPricePer1k: 0.001, OutputPricePer1k: 0.002},
+		},
+		EffectiveDate: "2024-01-01",
+		Description:   "Test pricing",
+	}
+	mockPricing := pricing.NewTestService(pricing.WithTable(testPriceTable))
+	
+	// Build registry with mock provider
+	mockRegistry := chat.NewProviderRegistry(logger)
+	mockRegistry.Register(model.ProviderConfig{
+		Name:      "test-mock",
+		Type:      model.ProviderTypeMock,
+		Priority:  1,
+		Enabled:   true,
+		Models:    []string{"gpt-4o-mini", "gpt-4", "test-model"},
+		Timeout:   30 * time.Second,
+		MaxRetries: 2,
+	}, mockProvider)
+	
+	mockRouter := chat.NewRouter(mockRegistry, logger)
+	mockFallbackChain := chat.NewFallbackChain(mockRouter, mockPricing, model.RouterConfig{}, logger)
+	mockChatUC := chat.NewChatUsecase(mockFallbackChain, mockPricing, mockRouter, chat.ChatUsecaseConfig{
+		DefaultTimeout: 30 * time.Second,
+		EnableCostTracking: true,
+	}, logger)
+	
+	chatHandlers := handlers.NewChatHandlers(logger, mockChatUC)
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
 	reviewHandlers := handlers.NewReviewHandlers(hitlUC, reviewRepo, string(signingKey), logger)
 

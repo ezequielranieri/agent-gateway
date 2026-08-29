@@ -3,24 +3,27 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
+	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/chat"
 )
 
 // ChatHandlers holds the chat completion handlers
 type ChatHandlers struct {
-	logger zerolog.Logger
+	logger    zerolog.Logger
+	usecase   *chat.ChatUsecase
 }
 
-// NewChatHandlers creates new chat handlers
-func NewChatHandlers(logger zerolog.Logger) *ChatHandlers {
+// NewChatHandlers creates new chat handlers with the chat usecase
+func NewChatHandlers(logger zerolog.Logger, usecase *chat.ChatUsecase) *ChatHandlers {
 	return &ChatHandlers{
-		logger: logger.With().Str("handler", "chat").Logger(),
+		logger:  logger.With().Str("handler", "chat").Logger(),
+		usecase: usecase,
 	}
 }
 
@@ -38,6 +41,8 @@ type ChatCompletionRequest struct {
 	MaxTokens   *int            `json:"max_tokens,omitempty"`
 	Stream      *bool           `json:"stream,omitempty"`
 	Tools       json.RawMessage `json:"tools,omitempty"`
+	ToolChoice  any             `json:"tool_choice,omitempty"`
+	User        string          `json:"user,omitempty"`
 }
 
 // ChatMessage represents a chat message
@@ -46,6 +51,7 @@ type ChatMessage struct {
 	Content    string          `json:"content"`
 	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
+	Name       string          `json:"name,omitempty"`
 }
 
 // ChatCompletionResponse represents the OpenAI-compatible response
@@ -56,6 +62,11 @@ type ChatCompletionResponse struct {
 	Model   string                 `json:"model"`
 	Choices []ChatCompletionChoice `json:"choices"`
 	Usage   ChatCompletionUsage    `json:"usage"`
+	// Extensions for gateway metadata
+	Provider string  `json:"provider,omitempty"`
+	CostUSD  float64 `json:"cost_usd,omitempty"`
+	LatencyMs int64  `json:"latency_ms,omitempty"`
+	Retried  bool    `json:"retried,omitempty"`
 }
 
 // ChatCompletionChoice represents a single choice
@@ -107,50 +118,140 @@ func (h *ChatHandlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Str("user_id", userID.String()).
 		Msg("Chat completion request")
 
-	// TODO: Call upstream provider (placeholder - returns mock response for now)
-	// For MVP, return a mock response that matches OpenAI format
+	// Convert handler request to usecase request
+	usecaseReq := h.convertToUsecaseRequest(req, tenantID.String(), userID.String())
 
-	// Estimate tokens (rough approximation: ~4 chars per token)
-	promptTokens := 0
-	for _, msg := range req.Messages {
-		promptTokens += len(msg.Content) / 4
-	}
-	if promptTokens == 0 {
-		promptTokens = 100
-	}
-
-	maxTokens := 1000
-	if req.MaxTokens != nil && *req.MaxTokens > 0 {
-		maxTokens = *req.MaxTokens
+	// Execute chat completion via usecase
+	ctx := r.Context()
+	resp, err := h.usecase.Complete(ctx, usecaseReq)
+	if err != nil {
+		logger.Error().Err(err).Msg("Chat completion failed")
+		h.writeError(w, r, h.mapError(err), err)
+		return
 	}
 
-	completionTokens := maxTokens / 2 // Rough estimate
-	totalTokens := promptTokens + completionTokens
+	// Convert usecase response to handler response
+	handlerResp := h.convertFromUsecaseResponse(resp, req.Model)
 
-	// Create mock response
-	response := ChatCompletionResponse{
-		ID:      "chatcmpl-" + domain.NewUUID().String()[:8],
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   req.Model,
-		Choices: []ChatCompletionChoice{
-			{
-				Index: 0,
-				Message: ChatMessage{
-					Role:    "assistant",
-					Content: "This is a mock response from the agent-gateway. Upstream provider integration pending.",
-				},
-				FinishReason: "stop",
+	h.writeJSON(w, http.StatusOK, handlerResp)
+}
+
+// convertToUsecaseRequest converts handler request to usecase request
+func (h *ChatHandlers) convertToUsecaseRequest(
+	req ChatCompletionRequest,
+	tenantID, userID string,
+) chat.ChatRequest {
+	messages := make([]model.Message, len(req.Messages))
+	for i, msg := range req.Messages {
+		messages[i] = model.Message{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCalls:  h.parseToolCalls(msg.ToolCalls),
+			ToolCallID: msg.ToolCallID,
+			Name:       msg.Name,
+		}
+	}
+
+	var tools []model.Tool
+	if len(req.Tools) > 0 {
+		if err := json.Unmarshal(req.Tools, &tools); err != nil {
+			h.logger.Warn().Err(err).Msg("Failed to parse tools")
+		}
+	}
+
+	return chat.ChatRequest{
+		Model:       req.Model,
+		Messages:    messages,
+		Temperature: req.Temperature,
+		MaxTokens:   req.MaxTokens,
+		Stream:      req.Stream != nil && *req.Stream,
+		Tools:       tools,
+		ToolChoice:  req.ToolChoice,
+		User:        userID,
+	}
+}
+
+// parseToolCalls parses tool calls from raw JSON
+func (h *ChatHandlers) parseToolCalls(raw json.RawMessage) []model.ToolCall {
+	if len(raw) == 0 {
+		return nil
+	}
+	var calls []model.ToolCall
+	if err := json.Unmarshal(raw, &calls); err != nil {
+		h.logger.Warn().Err(err).Msg("Failed to parse tool calls")
+		return nil
+	}
+	return calls
+}
+
+// convertFromUsecaseResponse converts usecase response to handler response
+func (h *ChatHandlers) convertFromUsecaseResponse(
+	resp chat.ChatResponse,
+	requestedModel string,
+) ChatCompletionResponse {
+	choices := make([]ChatCompletionChoice, len(resp.Completion.Response.Choices))
+	for i, choice := range resp.Completion.Response.Choices {
+		choices[i] = ChatCompletionChoice{
+			Index: choice.Index,
+			Message: ChatMessage{
+				Role:       choice.Message.Role,
+				Content:    choice.Message.Content,
+				ToolCalls:  h.marshalToolCalls(choice.Message.ToolCalls),
+				ToolCallID: choice.Message.ToolCallID,
+				Name:       choice.Message.Name,
 			},
-		},
-		Usage: ChatCompletionUsage{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      totalTokens,
-		},
+			FinishReason: choice.FinishReason,
+		}
 	}
 
-	h.writeJSON(w, http.StatusOK, response)
+	return ChatCompletionResponse{
+		ID:        resp.Completion.Response.ID,
+		Object:    resp.Completion.Response.Object,
+		Created:   resp.Completion.Response.Created,
+		Model:     resp.Completion.Response.Model,
+		Choices:   choices,
+		Usage: ChatCompletionUsage{
+			PromptTokens:     resp.Completion.Response.Usage.PromptTokens,
+			CompletionTokens: resp.Completion.Response.Usage.CompletionTokens,
+			TotalTokens:      resp.Completion.Response.Usage.TotalTokens,
+		},
+		Provider:   resp.Provider,
+		CostUSD:    resp.CostUSD,
+		LatencyMs:  resp.LatencyMs,
+		Retried:    resp.Retried,
+	}
+}
+
+// marshalToolCalls marshals tool calls to JSON
+func (h *ChatHandlers) marshalToolCalls(calls []model.ToolCall) json.RawMessage {
+	if calls == nil {
+		return nil
+	}
+	data, _ := json.Marshal(calls)
+	return data
+}
+
+// mapError maps domain errors to HTTP status codes
+func (h *ChatHandlers) mapError(err error) int {
+	switch {
+	case err == domain.ErrValidation:
+		return http.StatusBadRequest
+	case err == domain.ErrUnauthorized:
+		return http.StatusUnauthorized
+	case err == domain.ErrForbidden:
+		return http.StatusForbidden
+	case err == domain.ErrNotFound:
+		return http.StatusNotFound
+	case err == model.ErrProviderRateLimited:
+		return http.StatusTooManyRequests
+	case err == model.ErrProviderTimeout:
+		return http.StatusGatewayTimeout
+	case err == model.ErrProviderUnavailable,
+		err == model.ErrNoHealthyProvider:
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 func (h *ChatHandlers) writeJSON(w http.ResponseWriter, status int, data interface{}) {

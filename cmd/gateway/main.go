@@ -16,6 +16,7 @@ import (
 
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/guardrail"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/pricing"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	redisadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
@@ -24,6 +25,7 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/auth"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/chat"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/hitl"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/quota"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/role"
@@ -123,8 +125,20 @@ func main() {
 	// Initialize review handlers
 	reviewHandlers := handlers.NewReviewHandlers(hitlUC, reviewRepo, string(signingKey), logger)
 
+	// Initialize pricing service
+	pricingService, err := pricing.NewServiceFromDomainConfig(cfg.Pricing)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to initialize pricing service")
+	}
+
+	// Initialize chat usecase
+	chatUC, err := chat.BuildChatUsecaseFromConfig(context.Background(), cfg.Router, pricingService, logger)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to initialize chat usecase")
+	}
+
 	// Initialize chat handlers
-	chatHandlers := handlers.NewChatHandlers(logger)
+	chatHandlers := handlers.NewChatHandlers(logger, chatUC)
 
 	// Initialize middleware with real JWT service
 	authMW := middleware.NewAuth(middleware.AuthConfig{
