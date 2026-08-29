@@ -4,7 +4,7 @@
 
 Multi-tenant Agent Gateway / Control Plane for LLM agents — the **only path** between your application and the model. Every call authenticated, authorized, rate-limited, audited, and guarded.
 
-> Status: **MVP complete** — Phases 0-5 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**). Phases 6-8 (Tool Sandbox, External Classifier, CI/CD) deferred — see roadmap below.
+> Status: **MVP complete** — Phases 0-6 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**). Phases 7-8 (External Classifier, CI/CD) deferred — see roadmap below.
 
 ## The problem
 
@@ -22,6 +22,7 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 - **Human-in-the-Loop as a reusable service**: State machine in PostgreSQL + SSE streaming. Create approval request → human reviews via token → re-validate context → materialize. The same service for any write action across any agent.
 - **Guardrails as a domain interface**: `Guardrail` interface in `internal/domain/guardrail` — local implementation (regex, wordlist, PII patterns) ships by default; external classifier (Claude API, Llama Guard) plugs in as an adapter without touching domain logic.
 - **Model Routing with fallback & pricing**: `ModelProvider` port in `internal/domain/model` — OpenAI adapter (full), Anthropic/Ollama (stubbed), priority-based router, fallback chain with bounded retries + half-open circuit breaker, versioned pricing tables (provider+model → USD/1k tokens), pre-estimate/post-actual cost tracking integrated with rate-limit and audit.
+- **Tool Sandbox with WebAssembly isolation**: `ToolExecutor` port in `internal/domain/tool` — `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS mounts, no network by default, per-execution module instantiation; `MockExecutor` for tests; bounded agent loop (max 5 iterations) with HITL gate, per-step cost/audit/rate-limit accounting.
 
 ## Architecture
 
@@ -54,6 +55,7 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 │  hitl/      (SSE handler + PG state machine)                       │
 │  provider/  (OpenAI, Anthropic, Ollama, Mock)                      │
 │  pricing/   (versioned price tables)                               │
+│  tool/      (WasmExecutor — wazero, MockExecutor — tests)          │
 └─────────────────────────────────────────────────────────────────────┘
 
 Domain Layer (internal/domain): pure entities + sentinel errors, ZERO
@@ -67,8 +69,9 @@ cmd/
 internal/
 ├── domain/           entities: Tenant, User, Role, Quota, AuditEvent, ReviewRequest, GuardrailViolation
 │   └── model/        ModelProvider port, ChatRequest/Response, RouterConfig, PricingService, CircuitBreaker
+│   └── tool/         ToolExecutor port, ToolCall/ToolResult, ToolConfig, sentinel errors
 ├── usecase/          application services (gateways, ratelimit, audit, hitl, guardrail, chat)
-├── adapter/          postgres, redis, jwt, otel, guardrail, hitl, provider, pricing
+├── adapter/          postgres, redis, jwt, otel, guardrail, hitl, provider, pricing, tool
 ├── api/              OpenAPI 3.1 handlers (oapi-codegen generated)
 └── middleware/       chi middlewares: auth, tenant, ratelimit, audit, hitl
 migrations/           SQL schema + RLS policies + seed
@@ -196,7 +199,7 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 |---|---|---|
 | Model routing / fallback (GPT-4o → Claude → Llama local) | Requires provider abstraction + pricing model first | Provider port + `PricingService` implemented |
 | Pricing / cost abstraction (model + tokens → USD) | Prices change per provider; needs versioned config | `PricingService` with provider/version matrix |
-| Tool sandbox (WASM via wazero / gVisor) | Execution isolation is a separate boundary; gateway routes, doesn't execute | `ToolExecutor` interface + `WasmExecutor` adapter |
+| Tool sandbox (WASM via wazero) | **IMPLEMENTED** — `ToolExecutor` interface + `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS, no network, per-execution instantiation, bounded loop, HITL gate | ✅ Phase 6 complete |
 | External guardrail classifier (Claude API / Llama Guard) | Adds network dependency, latency, cost, API keys | `Guardrail` interface + `ExternalClassifier` adapter |
 | Prometheus metrics / Grafana dashboards | OTel stdout + `/metrics` works for demo; Grafana is ops | When demo needs persistent dashboards |
 | Schema-per-tenant isolation | RLS on shared instance is sufficient for current threat model | Only if concrete requirement for stronger isolation appears |
@@ -210,7 +213,7 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 - [x] **Phase 3** — HITL: state machine + SSE + re-validation + atomic approve
 - [x] **Phase 4** — Guardrails: domain interface + LocalGuardrail (regex/wordlist/PII)
 - [x] **Phase 5** — Model routing: provider port + fallback chain + circuit breaker + pricing abstraction + OpenAI adapter
-- [ ] **Phase 6** — Tool sandbox: `ToolExecutor` interface + wazero WASM adapter
+- [x] **Phase 6** — Tool sandbox: `ToolExecutor` interface + `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS mounts, no network by default, per-execution instantiation, bounded agent loop (max 5), HITL gate, per-step cost/audit/rate-limit
 - [ ] **Phase 7** — External guardrail classifier adapter
 - [ ] **Phase 8** — CI/CD pipeline + secret management + canary deploy
 
