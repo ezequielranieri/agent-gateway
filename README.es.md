@@ -4,7 +4,7 @@
 
 Gateway / Control Plane multi-tenant para agentes LLM — el **único camino** entre tu aplicación y el modelo. Cada llamada autenticada, autorizada, rate-limitada, auditada y guardada.
 
-> Estado: **MVP completo** — Fases 0-4 implementadas (Fundación, Rate Limiting, Audit Log, HITL, Guardrails). Fases 5-8 (Model Routing, Tool Sandbox, Clasificador Externo, CI/CD) postergadas — ver roadmap abajo.
+> Estado: **MVP completo** — Fases 0-7 implementadas (Fundación, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **Clasificador Externo**). Fase 8 (CI/CD) postergada — ver roadmap abajo.
 
 ## El problema
 
@@ -49,6 +49,7 @@ Todo sistema que opera agentes LLM a escala termina enfrentando tres preguntas i
 │  jwt/       (golang-jwt/v5 HS256, rotación multi-key via kid)      │
 │  otel/      (OpenTelemetry stdout exporter + Prometheus /metrics)  │
 │  guardrail/ (LocalGuardrail — regex/wordlist/patrones PII)         │
+│  guardrail/ (ExternalClassifier — OpenAI/Anthropic/LlamaGuard)     │
 │  hitl/      (handler SSE + state machine PG)                       │
 └─────────────────────────────────────────────────────────────────────┘
 
@@ -101,7 +102,7 @@ ALTER TABLE private.audit_events FORCE ROW LEVEL SECURITY;
 | Aislamiento tenant | PostgreSQL RLS FORCE + PK compuesta + middleware cross-check (token tenant = URL tenant) |
 | Integridad audit | Append-only `private.audit_events` con hash-chaining por tenant (`seq`, `prev_hash`, `chain_hash`); `VerifyChain` detecta manipulación; eventos con severidad (info/warn/critical) |
 | Rate limiting | Redis + `redis_rate` (token bucket), 3 dimensiones: reqs/min, tokens/min, tool_execs/min — por tenant, user, role |
-| Guardrails | Interfaz de dominio `Guardrail` + `LocalGuardrail` (regex, wordlist, PII, patrones inyección); clasificador externo como adapter opcional |
+| Guardrails | Interfaz de dominio `Guardrail` + `LocalGuardrail` (regex, wordlist, PII, patrones inyección); `CompositeGuardrail` con clasificadores externos (OpenAI Moderation, Anthropic, Llama Guard) — merge logic: any/all/weighted, fail behaviors: fallback_local/fail_open/fail_closed |
 | HITL | State machine en PG (`PENDING` → `APPROVED`/`REJECTED`/`EXPIRED`), token opaco (SHA-256 guardado), streaming SSE, re-validación completa al aprobar |
 
 ## Quickstart
@@ -192,7 +193,7 @@ Mismo principio que `go-authz` y `agro-iam`: nombrado explícito, no silenciosam
 | Model routing / fallback (GPT-4o → Claude → Llama local) | Requiere abstracción de provider + pricing model primero | Provider port + `PricingService` implementados |
 | Abstracción de pricing/costo (model + tokens → USD) | Precios cambian por provider; necesita config versionado | `PricingService` con matriz provider/version |
 | Tool sandbox (WASM via wazero / gVisor) | Aislamiento de ejecución es boundary separado; gateway routea, no ejecuta | Interfaz `ToolExecutor` + adapter `WasmExecutor` |
-| Clasificador externo de guardrails (Claude API / Llama Guard) | Agrega dependencia de red, latencia, costo, API keys | Interfaz `Guardrail` + adapter `ExternalClassifier` |
+| Clasificador externo de guardrails (OpenAI / Anthropic / Llama Guard) | Agrega dependencia de red, latencia, costo, API keys | ✅ Fase 7 completa — adapter `ExternalClassifier` + merge compuesto |
 | Métricas Prometheus / Dashboards Grafana | OTel stdout + `/metrics` anda para demo; Grafana es ops | Cuando el demo necesite dashboards persistentes |
 | Aislamiento schema-per-tenant | RLS en instancia compartida basta para threat model actual | Solo si aparece requisito concreto de aislamiento mayor |
 | Secret scanning full-history en cada push | CI escanea diffs de PR + rango pusheado; full history = alert fatigue | Job programado periódico si alguna vez se necesita |
@@ -204,9 +205,9 @@ Mismo principio que `go-authz` y `agro-iam`: nombrado explícito, no silenciosam
 - [x] **Fase 2** — Audit log: append-only + hash chaining + VerifyChain
 - [x] **Fase 3** — HITL: state machine + SSE + re-validación al aprobar
 - [x] **Fase 4** — Guardrails: interfaz dominio + LocalGuardrail (regex/wordlist/PII)
-- [ ] **Fase 5** — Model routing: provider port + fallback + abstracción pricing
-- [ ] **Fase 6** — Tool sandbox: interfaz `ToolExecutor` + adapter wazero WASM
-- [ ] **Fase 7** — Adapter clasificador guardrail externo
+- [x] **Fase 5** — Model routing: provider port + fallback chain + circuit breaker + pricing + adapter OpenAI
+- [x] **Fase 6** — Tool sandbox: interfaz `ToolExecutor` + `WasmExecutor` (wazero) con fuel/memory/wall-time, FS read-only, sin red, instanciación por ejecución, bounded loop + HITL gate
+- [x] **Fase 7** — Clasificador externo de guardrails (OpenAI Moderation, Anthropic, Llama Guard) con merge logic (any/all/weighted), fail behaviors (fallback_local/fail_open/fail_closed), HTTP client con retry + circuit breaker
 - [ ] **Fase 8** — Pipeline CI/CD + secret management + deploy canary
 
 ## Licencia
