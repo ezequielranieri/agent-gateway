@@ -2,7 +2,15 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    environment: 'staging'
+    environment: '${ENVIRONMENT:-staging}'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
 
 scrape_configs:
   - job_name: 'agent-gateway'
@@ -10,6 +18,10 @@ scrape_configs:
       - targets: ['gateway:8080']
     metrics_path: '/metrics'
     scheme: 'http'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'agent-gateway'
 
   - job_name: 'prometheus'
     static_configs:
@@ -26,3 +38,11 @@ scrape_configs:
   - job_name: 'jaeger'
     static_configs:
       - targets: ['jaeger:16686']
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']

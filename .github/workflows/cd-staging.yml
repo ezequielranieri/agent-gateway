@@ -1,0 +1,103 @@
+name: CD Staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  STAGING_COMPOSE_FILE: docker-compose.staging.yml
+  ENV_FILE: .env.staging
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Deploy to staging server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.STAGING_PORT }}
+          script: |
+            cd /opt/agent-gateway
+            
+            # Pull latest image
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
+            # Update docker-compose with new image tag
+            sed -i 's|image: agent-gateway:.*|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest|' ${{ env.STAGING_COMPOSE_FILE }}
+            
+            # Deploy with zero-downtime (rolling update)
+            docker compose -f ${{ env.STAGING_COMPOSE_FILE }} --env-file ${{ env.ENV_FILE }} up -d --no-deps gateway
+            
+            # Wait for health check
+            sleep 15
+            
+            # Run migrations
+            docker compose -f ${{ env.STAGING_COMPOSE_FILE }} --env-file ${{ env.ENV_FILE }} exec -T gateway goose -dir migrations postgres "$$DATABASE_URL" up
+            
+            # Verify deployment
+            curl -f http://localhost:8080/health || exit 1
+            
+            echo "Staging deployment successful!"
+
+      - name: Notify deployment status
+        if: always()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "Staging deployment ${{ job.status }} for ${{ github.repository }}@${{ github.sha }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Staging Deployment* ${{ job.status }} for `<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|${{ github.repository }}@${{ github.sha }}>`"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  canary-deploy:
+    name: Canary Deploy
+    runs-on: ubuntu-latest
+    needs: [deploy-staging]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Canary deployment (10% traffic)
+        run: |
+          echo "Starting canary deployment with 10% traffic..."
+          # This would typically use a service mesh (Istio/Linkerd) or load balancer
+          # For now, we deploy a canary instance alongside the main one
+          echo "Canary deployment logic would go here"
+          echo "Monitor metrics for 10 minutes before promoting or rolling back"

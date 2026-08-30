@@ -1,0 +1,50 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: agent-gateway
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: agent-gateway
+          __path__: /var/log/agent-gateway/*.log
+
+  - job_name: docker
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: docker
+          __path__: /var/lib/docker/containers/*/*-json.log
+    pipeline_stages:
+      - docker: {}
+      - labels:
+          container_name:
+          image_name:
+      - match:
+          selector: '{job="docker"}'
+          stages:
+            - json:
+                expressions:
+                  log: log
+                  stream: stream
+                  time: time
+            - labels:
+                log:
+                stream:
+
+  - job_name: system
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: system
+          __path__: /var/log/syslog

@@ -1,0 +1,25 @@
+# SOPS configuration for agent-gateway secrets
+# Encrypts secrets using age (public keys)
+# https://github.com/getsops/sops
+
+creation_rules:
+  - path_regex: \.env\.prod$
+    age: >-
+      age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx1
+      age1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy2
+    encrypted_regex: '^(POSTGRES_PASSWORD|REDIS_PASSWORD|JWT_SECRET|WEBHOOK_URL)$'
+
+  - path_regex: \.env\.staging$
+    age: >-
+      age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx1
+      age1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy2
+    encrypted_regex: '^(POSTGRES_PASSWORD|REDIS_PASSWORD|JWT_SECRET|WEBHOOK_URL)$'
+
+  - path_regex: \.env\.(staging|prod)\.enc$
+    age: >-
+      age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx1
+      age1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy2
+    encrypted_regex: '.*'
+
+# Keep unencrypted files as-is (for .env.example)
+ignore_missing: false

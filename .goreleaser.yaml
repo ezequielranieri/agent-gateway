@@ -1,0 +1,95 @@
+# GoReleaser configuration for agent-gateway
+# https://goreleaser.com
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: gateway
+    main: ./cmd/gateway
+    binary: gateway
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    hooks:
+      post:
+        - ./scripts/sign-binary.sh {{.Path}}
+
+archives:
+  - format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: ezequielranieri
+    name: agent-gateway
+  draft: false
+  prerelease: auto
+
+docker:
+  - id: gateway
+    image_templates:
+      - "ghcr.io/ezequielranieri/agent-gateway:{{ .Version }}"
+      - "ghcr.io/ezequielranieri/agent-gateway:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64,linux/arm64"
+      - "--label=org.opencontainers.image.title=agent-gateway"
+      - "--label=org.opencontainers.image.description=Multi-tenant Agent Gateway for LLM agents"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/ezequielranieri/agent-gateway"
+    goos: linux
+    goarch:
+      - amd64
+      - arm64
+
+signs:
+  - artifacts: checksum
+    args:
+      - --batch
+      - --local-user
+      - ${{ env.GPG_FINGERPRINT }}
+      - --output
+      - ${signature}
+      - --detach-sign
+      - ${artifact}
+
+sboms:
+  - artifacts: archive
+    formats:
+      - spdx-json
+      - cyclonedx-json

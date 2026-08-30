@@ -202,9 +202,98 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 | Pricing / cost abstraction (model + tokens → USD) | Prices change per provider; needs versioned config | `PricingService` with provider/version matrix |
 | Tool sandbox (WASM via wazero) | **IMPLEMENTED** — `ToolExecutor` interface + `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS, no network, per-execution instantiation, bounded loop, HITL gate | ✅ Phase 6 complete |
 | External guardrail classifier (OpenAI / Anthropic / Llama Guard) | Adds network dependency, latency, cost, API keys | ✅ Phase 7 complete — `ExternalClassifier` adapter + composite merge |
-| Prometheus metrics / Grafana dashboards | OTel stdout + `/metrics` works for demo; Grafana is ops | When demo needs persistent dashboards |
+| Prometheus metrics / Grafana dashboards | **IMPLEMENTED** — Prometheus + Grafana + Alertmanager + Loki/Promtail for logs | ✅ Phase 8 complete |
 | Schema-per-tenant isolation | RLS on shared instance is sufficient for current threat model | Only if concrete requirement for stronger isolation appears |
-| Full-history secret scanning on every push | CI scans PR diffs + pushed range; full history = alert fatigue | Periodic scheduled job if ever needed |
+| Full-history secret scanning on every push | CI scans PR diffs + pushed range; full history = alert fatigue | Gitleaks + Trivy in CI; scheduled job if needed |
+
+## CI/CD Pipeline (Phase 8)
+
+### Workflows
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `.github/workflows/ci.yml` | Push to main, PR | Lint, test, build, secret scan, vulnerability scan |
+| `.github/workflows/cd-staging.yml` | Push to main | Deploy to staging (auto) |
+| `.github/workflows/release.yml` | Tag push (v*) | Build release, sign images, deploy to production |
+
+### Secret Management
+
+- **GitHub Secrets**: CI/CD secrets (registry tokens, SSH keys, webhook URLs)
+- **SOPS + age**: Encrypted `.env.staging.enc` and `.env.prod.enc` in repo
+  - Only authorized age public keys can decrypt
+  - Keys managed via `.sops.yaml` config
+- **No secrets in plaintext** in repo or Docker images
+
+### Canary Deployment
+
+```bash
+# Full canary flow (deploy → monitor → promote)
+./scripts/canary-deploy.sh full v1.0.0-rc2
+
+# Or step by step:
+./scripts/canary-deploy.sh deploy v1.0.0-rc2
+./scripts/canary-deploy.sh monitor
+./scripts/canary-deploy.sh promote
+
+# Rollback if needed
+./scripts/canary-deploy.sh rollback
+```
+
+**Promotion criteria** (configurable):
+- Success rate ≥ 95% (default)
+- Monitor duration: 10 minutes (default)
+- P99 latency < 5s
+- Error rate < 5%
+
+### Observability Stack
+
+| Component | Purpose |
+|---|---|
+| **Prometheus** | Metrics collection + alerting rules |
+| **Grafana** | Dashboards (auto-provisioned) |
+| **Alertmanager** | Alert routing (email, Slack, PagerDuty) |
+| **Loki + Promtail** | Log aggregation |
+| **Jaeger** | Distributed tracing |
+
+**Key dashboards** (auto-provisioned):
+- `Agent Gateway - Overview` — Service health, latency, costs, guardrails, HITL, tools
+
+**Alert rules** (`prometheus/rules/alerts.yml`):
+- Service down, high error rate, high latency
+- Rate limit exhaustion, DB/Redis saturation
+- Guardrail violation spikes, auth failures
+- Cost spikes, model fallback rate
+
+### Quickstart: Local CI
+
+```bash
+# Run CI locally (requires act)
+act -j lint
+act -j test
+act -j build
+
+# Or just run the steps manually:
+golangci-lint run ./...
+go test -race -count=1 ./...
+go build -o bin/gateway ./cmd/gateway
+docker build -t agent-gateway:local .
+```
+
+### Release Process
+
+```bash
+# 1. Create and push tag
+git tag v1.0.0
+git push origin v1.0.0
+
+# 2. GitHub Actions runs:
+#    - GoReleaser creates GitHub Release + binaries
+#    - Docker images built & pushed to GHCR (signed with cosign)
+#    - Production deployment (blue-green)
+
+# 3. Verify deployment
+curl https://api.agent-gateway.com/health
+```
 
 ## Roadmap
 
@@ -216,7 +305,7 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 - [x] **Phase 5** — Model routing: provider port + fallback chain + circuit breaker + pricing abstraction + OpenAI adapter
 - [x] **Phase 6** — Tool sandbox: `ToolExecutor` interface + `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS mounts, no network by default, per-execution instantiation, bounded agent loop (max 5), HITL gate, per-step cost/audit/rate-limit
 - [x] **Phase 7** — External guardrail classifier adapter (OpenAI Moderation, Anthropic, Llama Guard) with composite merge logic (any/all/weighted), fail behaviors (fallback_local/fail_open/fail_closed), HTTP client with retry + circuit breaker
-- [ ] **Phase 8** — CI/CD pipeline + secret management + canary deploy
+- [x] **Phase 8** — CI/CD pipeline (GitHub Actions), secret management (SOPS + GitHub Secrets), canary deploy, observability stack (Prometheus/Grafana/Alertmanager/Loki/Jaeger)
 
 ## License
 

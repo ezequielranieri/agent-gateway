@@ -4,7 +4,7 @@
 
 Gateway / Control Plane multi-tenant para agentes LLM — el **único camino** entre tu aplicación y el modelo. Cada llamada autenticada, autorizada, rate-limitada, auditada y guardada.
 
-> Estado: **MVP completo** — Fases 0-7 implementadas (Fundación, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **Clasificador Externo**). Fase 8 (CI/CD) postergada — ver roadmap abajo.
+> Estado: **MVP completo** — Fases 0-8 implementadas (Fundación, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **Clasificador Externo**, **CI/CD + Observabilidad**). Ver roadmap abajo.
 
 ## El problema
 
@@ -194,9 +194,98 @@ Mismo principio que `go-authz` y `agro-iam`: nombrado explícito, no silenciosam
 | Abstracción de pricing/costo (model + tokens → USD) | Precios cambian por provider; necesita config versionado | `PricingService` con matriz provider/version |
 | Tool sandbox (WASM via wazero / gVisor) | Aislamiento de ejecución es boundary separado; gateway routea, no ejecuta | Interfaz `ToolExecutor` + adapter `WasmExecutor` |
 | Clasificador externo de guardrails (OpenAI / Anthropic / Llama Guard) | Agrega dependencia de red, latencia, costo, API keys | ✅ Fase 7 completa — adapter `ExternalClassifier` + merge compuesto |
-| Métricas Prometheus / Dashboards Grafana | OTel stdout + `/metrics` anda para demo; Grafana es ops | Cuando el demo necesite dashboards persistentes |
+| Métricas Prometheus / Dashboards Grafana | **IMPLEMENTADO** — Prometheus + Grafana + Alertmanager + Loki/Promtail para logs | ✅ Fase 8 completa |
 | Aislamiento schema-per-tenant | RLS en instancia compartida basta para threat model actual | Solo si aparece requisito concreto de aislamiento mayor |
-| Secret scanning full-history en cada push | CI escanea diffs de PR + rango pusheado; full history = alert fatigue | Job programado periódico si alguna vez se necesita |
+| Secret scanning full-history en cada push | CI escanea diffs de PR + rango pusheado; full history = alert fatigue | Gitleaks + Trivy en CI; job programado si se necesita |
+
+## Pipeline CI/CD (Fase 8)
+
+### Workflows
+
+| Workflow | Trigger | Propósito |
+|---|---|---|
+| `.github/workflows/ci.yml` | Push a main, PR | Lint, test, build, secret scan, vulnerability scan |
+| `.github/workflows/cd-staging.yml` | Push a main | Deploy a staging (automático) |
+| `.github/workflows/release.yml` | Tag push (v*) | Build release, firmar imágenes, deploy a producción |
+
+### Gestión de Secretos
+
+- **GitHub Secrets**: Secrets de CI/CD (registry tokens, SSH keys, webhook URLs)
+- **SOPS + age**: `.env.staging.enc` y `.env.prod.enc` encriptados en el repo
+  - Solo claves públicas age autorizadas pueden desencriptar
+  - Claves gestionadas via `.sops.yaml`
+- **Ningún secreto en texto plano** en repo o imágenes Docker
+
+### Despliegue Canary
+
+```bash
+# Flujo canary completo (deploy → monitor → promote)
+./scripts/canary-deploy.sh full v1.0.0-rc2
+
+# O paso a paso:
+./scripts/canary-deploy.sh deploy v1.0.0-rc2
+./scripts/canary-deploy.sh monitor
+./scripts/canary-deploy.sh promote
+
+# Rollback si hace falta
+./scripts/canary-deploy.sh rollback
+```
+
+**Criterios de promoción** (configurables):
+- Success rate ≥ 95% (default)
+- Duración de monitoreo: 10 minutos (default)
+- Latencia P99 < 5s
+- Error rate < 5%
+
+### Stack de Observabilidad
+
+| Componente | Propósito |
+|---|---|
+| **Prometheus** | Recolección de métricas + reglas de alerta |
+| **Grafana** | Dashboards (auto-provisionados) |
+| **Alertmanager** | Enrutamiento de alertas (email, Slack, PagerDuty) |
+| **Loki + Promtail** | Agregación de logs |
+| **Jaeger** | Trazado distribuido |
+
+**Dashboards clave** (auto-provisionados):
+- `Agent Gateway - Overview` — Salud del servicio, latencia, costos, guardrails, HITL, tools
+
+**Reglas de alerta** (`prometheus/rules/alerts.yml`):
+- Servicio caído, error rate alto, latencia alta
+- Agotamiento de rate limit, saturación DB/Redis
+- Picos de violaciones guardrail, fallos de auth
+- Picos de costo, rate de fallback de modelos
+
+### Quickstart: CI Local
+
+```bash
+# Correr CI localmente (requiere act)
+act -j lint
+act -j test
+act -j build
+
+# O correr los pasos manualmente:
+golangci-lint run ./...
+go test -race -count=1 ./...
+go build -o bin/gateway ./cmd/gateway
+docker build -t agent-gateway:local .
+```
+
+### Proceso de Release
+
+```bash
+# 1. Crear y pushear tag
+git tag v1.0.0
+git push origin v1.0.0
+
+# 2. GitHub Actions ejecuta:
+#    - GoReleaser crea GitHub Release + binarios
+#    - Imágenes Docker construidas y pusheadas a GHCR (firmadas con cosign)
+#    - Deploy a producción (blue-green)
+
+# 3. Verificar deploy
+curl https://api.agent-gateway.com/health
+```
 
 ## Roadmap
 
@@ -208,7 +297,7 @@ Mismo principio que `go-authz` y `agro-iam`: nombrado explícito, no silenciosam
 - [x] **Fase 5** — Model routing: provider port + fallback chain + circuit breaker + pricing + adapter OpenAI
 - [x] **Fase 6** — Tool sandbox: interfaz `ToolExecutor` + `WasmExecutor` (wazero) con fuel/memory/wall-time, FS read-only, sin red, instanciación por ejecución, bounded loop + HITL gate
 - [x] **Fase 7** — Clasificador externo de guardrails (OpenAI Moderation, Anthropic, Llama Guard) con merge logic (any/all/weighted), fail behaviors (fallback_local/fail_open/fail_closed), HTTP client con retry + circuit breaker
-- [ ] **Fase 8** — Pipeline CI/CD + secret management + deploy canary
+- [x] **Fase 8** — Pipeline CI/CD (GitHub Actions), secret management (SOPS + GitHub Secrets), canary deploy, observability stack (Prometheus/Grafana/Alertmanager/Loki/Jaeger)
 
 ## Licencia
 
