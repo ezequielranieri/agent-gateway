@@ -212,8 +212,8 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `.github/workflows/ci.yml` | Push to main, PR | Lint, test, build, secret scan, vulnerability scan |
-| `.github/workflows/cd-staging.yml` | Push to main | Deploy to staging (auto) |
+| `.github/workflows/ci.yml` | Push to master, PR | Lint, test, build, secret scan, vulnerability scan |
+| `.github/workflows/cd-staging.yml` | Push to master | Deploy to staging (auto) |
 | `.github/workflows/release.yml` | Tag push (v*) | Build release, sign images, deploy to production |
 
 ### Secret Management

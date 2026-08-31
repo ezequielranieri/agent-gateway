@@ -204,8 +204,8 @@ Mismo principio que `go-authz` y `agro-iam`: nombrado explícito, no silenciosam
 
 | Workflow | Trigger | Propósito |
 |---|---|---|
-| `.github/workflows/ci.yml` | Push a main, PR | Lint, test, build, secret scan, vulnerability scan |
-| `.github/workflows/cd-staging.yml` | Push a main | Deploy a staging (automático) |
+| `.github/workflows/ci.yml` | Push a master, PR | Lint, test, build, secret scan, vulnerability scan |
+| `.github/workflows/cd-staging.yml` | Push a master | Deploy a staging (automático) |
 | `.github/workflows/release.yml` | Tag push (v*) | Build release, firmar imágenes, deploy a producción |
 
 ### Gestión de Secretos

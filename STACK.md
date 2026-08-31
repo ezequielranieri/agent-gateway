@@ -77,7 +77,7 @@ OpenAPI 3.1, definido desde el día 1. Handlers generados con `oapi-codegen`.
 
 ## Auditoría de seguridad en CI
 
-El pipeline incluye un job `secrets` (gitleaks) que escanea el diff de cada Pull Request y el rango pusheado en cada push a `main`, bloqueando el merge ante cualquier credencial detectada. No escanea el historial completo del repositorio en cada push (decisión deliberada: evita que un hallazgo histórico ya resuelto genere fricción recurrente en cada push futuro — "alert fatigue"). Si en el futuro se requiere una auditoría periódica de historial completo, debe implementarse como job programado (`schedule`) independiente del flujo normal de CI, no atado a cada push.
+El pipeline incluye un job `secrets` (gitleaks) que escanea el diff de cada Pull Request y el rango pusheado en cada push a `master`, bloqueando el merge ante cualquier credencial detectada. No escanea el historial completo del repositorio en cada push (decisión deliberada: evita que un hallazgo histórico ya resuelto genere fricción recurrente en cada push futuro — "alert fatigue"). Si en el futuro se requiere una auditoría periódica de historial completo, debe implementarse como job programado (`schedule`) independiente del flujo normal de CI, no atado a cada push.
 
 ## Decisión: Rate Limiter fail-open ante caída de Redis
 
