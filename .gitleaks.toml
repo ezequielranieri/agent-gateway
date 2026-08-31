@@ -1,10 +1,11 @@
 # Gitleaks configuration for agent-gateway
 # https://github.com/gitleaks/gitleaks
 
-[allowlist]
+title = "agent-gateway gitleaks config"
+
+[[allowlist]]
   description = "False positives in OpenAPI spec examples"
   files = ["internal/api/openapi.go"]
-  # Example JWT tokens in OpenAPI spec comments are not real secrets
   regexes = [
     "eyJ[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+",
     "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4uLi4="
