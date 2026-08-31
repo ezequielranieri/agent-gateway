@@ -39,6 +39,10 @@
 | Métricas | Prometheus (`/metrics` endpoint) |
 | Trazas | OpenTelemetry (stdout exporter para dev) |
 | Healthchecks | /health, /ready (live DB + Redis) |
+| Dashboards | Grafana (auto-provisioned) |
+| Alertas | Alertmanager (email, Slack, PagerDuty) |
+| Logs centralizados | Loki + Promtail |
+| Trazas distribuidas | Jaeger |
 
 ## Testing
 
@@ -56,8 +60,9 @@ OpenAPI 3.1, definido desde el día 1. Handlers generados con `oapi-codegen`.
 | Capa | Tecnología |
 |---|---|
 | Local / Demo | Docker Compose (Postgres 16 + Redis 7 + Gateway) |
-| CI | GitHub Actions (lint, test, build, secret scan) |
+| CI | GitHub Actions (test, build, secret scan gitleaks, vulnerability scan Trivy) |
 | Secretos | Variables de entorno + .env.example — nada hardcodeado |
+| Registry | GHCR (ghcr.io) — build & push en push a master |
 
 ## Explícitamente fuera del MVP
 
@@ -70,10 +75,7 @@ OpenAPI 3.1, definido desde el día 1. Handlers generados con `oapi-codegen`.
 ## Deuda técnica explícita
 
 1. **Redis SPOF** — instancia única en MVP. Criterio de salida: migrar a Sentinel/Cluster antes de producción real.
-2. **Sin tool sandbox** — gateway routea, no ejecuta. Criterio: interfaz `ToolExecutor` + adapter wazero WASM.
-3. **Sin model routing/fallback** — single provider por ahora. Criterio: provider port + `PricingService` implementados.
-4. **Sin clasificador externo de guardrails** — solo implementación local. Criterio: interfaz `Guardrail` + adapter `ExternalClassifier`.
-5. **Sin schema-per-tenant** — RLS en instancia compartida basta. Criterio: evaluar solo ante requisito real de aislamiento fuerte.
+2. **Schema-per-tenant isolation** — RLS en instancia compartida basta. Criterio: evaluar solo ante requisito real de aislamiento fuerte.
 
 ## Auditoría de seguridad en CI
 

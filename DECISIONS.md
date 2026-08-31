@@ -45,10 +45,7 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 **Technical debt (explicit, named):**
 1. **Redis SPOF** — single instance in MVP. Exit: migrate to Sentinel/Cluster before production.
-2. **No tool sandbox** — gateway routes, doesn't execute. Exit: `ToolExecutor` interface + wazero WASM adapter.
-3. **No model routing/fallback** — single provider for now. Exit: provider port + `PricingService` implemented.
-4. **No external guardrail classifier** — local implementation only. Exit: `Guardrail` interface + `ExternalClassifier` adapter.
-5. **No schema-per-tenant** — RLS on shared instance is sufficient. Exit: only if concrete requirement appears.
+2. **Schema-per-tenant isolation** — RLS on shared instance is sufficient. Exit: only if concrete requirement for stronger isolation appears.
 
 ---
 
@@ -210,12 +207,14 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 ---
 
-### AD-009 · Guardrails: Domain Interface + Local Implementation — Status: Accepted
+### AD-009 · Guardrails: Domain Interface + Local + External Implementation — Status: Accepted
 
 **Rule**
 - Guardrails MUST be a **domain interface** (`Guardrail`) in `internal/domain/guardrail` with `CheckInput`, `CheckOutput`, `Violation` types.
 - A **local implementation** (`LocalGuardrail`) ships by default: regex patterns, wordlists, PII detection (email, credit card, SSN), prompt injection heuristics — zero network dependency, zero API keys, runs in-process.
-- External classifiers (Claude API, Llama Guard) plug in as **adapters** implementing `Guardrail` — never in the domain.
+- **External classifiers** (OpenAI Moderation, Anthropic, Llama Guard via Ollama) plug in as **adapters** implementing `ExternalClassifier` — never in the domain.
+- **CompositeGuardrail** merges local + external results with configurable merge logic (`any_violation`, `all_violation`, `weighted`) and fail behavior (`fallback_local`, `fail_open`, `fail_closed`).
+- **ExternalClassifier** adapters implement retry + circuit breaker, support per-category thresholds, and run behind `CompositeGuardrail` with `SendContentExternal` flag for data residency.
 - Input validation fails closed (reject); output validation fails closed (reject or sanitize based on severity).
 - Guardrail violations are recorded in audit log with severity `critical`.
 
@@ -226,33 +225,40 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 **Cost accepted**
 - Local implementation catches common patterns but not semantic attacks; external classifier adapter fills that gap when needed.
 - Regex/wordlist maintenance is manual; accepted for portfolio scope.
+- External classifier adds network dependency and cost; gated by `SendContentExternal` flag for data residency requirements.
 
 ---
 
-### AD-010 · Model Routing: Provider Port + Fallback + Pricing Abstraction — Status: Open (Design Phase)
+### AD-010 · Model Routing: Provider Port + Fallback + Pricing Abstraction — Status: Accepted (Implemented)
 
 **Rule**
 - Model routing MUST be behind a **provider port** (`ModelProvider` interface) in `internal/domain/model`.
 - Router selects provider based on: availability, latency SLO, cost budget, tenant preference.
-- Fallback chain: primary → secondary → local (Ollama/Llama.cpp) — bounded retries, circuit breaker.
-- **PricingService** maps `model + input_tokens + output_tokens → USD` with versioned price tables per provider.
+- Fallback chain: primary → secondary → local (Ollama/Llama.cpp) — bounded retries, circuit breaker (half-open).
+- **PricingService** maps `model + input_tokens + output_tokens → USD` with versioned price tables per provider (provider + model → USD/1k tokens).
+- Pre-estimate cost before routing, post-actual cost after completion, integrated with rate-limit and audit.
 
 **Why:** A gateway that only calls one provider isn't a gateway — it's a proxy. Production needs routing, fallback, and cost control.
 
 **Trade-off:** Adds provider abstraction layer; pricing tables must be maintained.
 
+**Implemented:** OpenAI adapter (full), Anthropic/Ollama adapters (stubbed), `FallbackChain` with bounded retries + half-open circuit breaker, `PricingService` with versioned tables, pre-estimate/post-actual cost tracking integrated with rate-limit and audit.
+
 ---
 
-### AD-011 · Tool Sandbox: ToolExecutor Interface + WASM (wazero) — Status: Open (Design Phase)
+### AD-011 · Tool Sandbox: ToolExecutor Interface + WASM (wazero) — Status: Accepted (Implemented)
 
 **Rule**
 - Tool execution MUST be behind a **`ToolExecutor` interface** in `internal/domain/tool`.
 - Default implementation: `MockExecutor` for tests, `WasmExecutor` (wazero) for production — WASM runs in-process, no kernel mods, portable, strong isolation.
-- Each tenant gets isolated module instance; resource limits (fuel, memory, wall time) enforced per execution.
+- Each execution gets isolated module instance; resource limits (fuel, memory, wall time) enforced per execution; read-only FS mounts, no network by default.
+- **Bounded agent loop** (max 5 iterations) with HITL gate for tools requiring approval, per-step cost/audit/rate-limit accounting.
 
 **Why:** If the agent calls `rm -rf /` or accesses another tenant's secrets, the gateway must prevent it. Sandbox is the enforcement point.
 
 **Trade-off:** wazero adds binary size and compilation complexity; gVisor/Firecracker are heavier alternatives.
+
+**Implemented:** `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS mounts, no network by default, per-execution module instantiation; `MockExecutor` for tests; bounded agent loop (max 5 iterations) with HITL gate, per-step cost/audit/rate-limit accounting.
 
 ---
 
@@ -283,15 +289,15 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 ## 5. Reference Roadmap (high level)
 
-- [ ] **Phase 0** — Foundation: domain entities, RLS schema, auth primitives, middleware chain
-- [ ] **Phase 1** — Rate limiting: Redis token bucket (reqs/tokens/tools), per tenant/user/role
-- [ ] **Phase 2** — Audit log: append-only + hash chaining + VerifyChain
-- [ ] **Phase 3** — HITL: state machine + SSE + re-validation on approve
-- [ ] **Phase 4** — Guardrails: domain interface + LocalGuardrail (regex/wordlist/PII)
-- [ ] **Phase 5** — Model routing: provider port + fallback + pricing abstraction
-- [ ] **Phase 6** — Tool sandbox: `ToolExecutor` interface + wazero WASM adapter
-- [ ] **Phase 7** — External guardrail classifier adapter
-- [ ] **Phase 8** — CI/CD pipeline + secret management + canary deploy
+- [x] **Phase 0** — Foundation: domain entities, RLS schema, auth primitives, middleware chain
+- [x] **Phase 1** — Rate limiting: Redis token bucket (reqs/tokens/tools), per tenant/user/role
+- [x] **Phase 2** — Audit log: append-only + hash chaining + VerifyChain
+- [x] **Phase 3** — HITL: state machine + SSE + re-validation on approve
+- [x] **Phase 4** — Guardrails: domain interface + LocalGuardrail (regex/wordlist/PII)
+- [x] **Phase 5** — Model routing: provider port + fallback + pricing abstraction
+- [x] **Phase 6** — Tool sandbox: `ToolExecutor` interface + wazero WASM adapter
+- [x] **Phase 7** — External guardrail classifier adapter (OpenAI Moderation, Llama Guard)
+- [x] **Phase 8** — CI/CD pipeline + secret management + canary deploy + observability
 
 ---
 
