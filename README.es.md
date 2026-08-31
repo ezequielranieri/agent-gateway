@@ -51,6 +51,9 @@ Todo sistema que opera agentes LLM a escala termina enfrentando tres preguntas i
 │  guardrail/ (LocalGuardrail — regex/wordlist/patrones PII)         │
 │  guardrail/ (ExternalClassifier — OpenAI/Anthropic/LlamaGuard)     │
 │  hitl/      (handler SSE + state machine PG)                       │
+│  provider/  (OpenAI, Anthropic, Ollama, Mock)                      │
+│  pricing/   (versioned price tables)                               │
+│  tool/      (WasmExecutor — wazero, MockExecutor — tests)          │
 └─────────────────────────────────────────────────────────────────────┘
 
 Capa de Dominio (internal/domain): entidades puras + errores centinela, CERO
@@ -190,11 +193,6 @@ Mismo principio que `go-authz` y `agro-iam`: nombrado explícito, no silenciosam
 
 | Ítem | Razón | Criterio de salida |
 |---|---|---|
-| Model routing / fallback (GPT-4o → Claude → Llama local) | Requiere abstracción de provider + pricing model primero | Provider port + `PricingService` implementados |
-| Abstracción de pricing/costo (model + tokens → USD) | Precios cambian por provider; necesita config versionado | `PricingService` con matriz provider/version |
-| Tool sandbox (WASM via wazero / gVisor) | Aislamiento de ejecución es boundary separado; gateway routea, no ejecuta | Interfaz `ToolExecutor` + adapter `WasmExecutor` |
-| Clasificador externo de guardrails (OpenAI / Anthropic / Llama Guard) | Agrega dependencia de red, latencia, costo, API keys | ✅ Fase 7 completa — adapter `ExternalClassifier` + merge compuesto |
-| Métricas Prometheus / Dashboards Grafana | **IMPLEMENTADO** — Prometheus + Grafana + Alertmanager + Loki/Promtail para logs | ✅ Fase 8 completa |
 | Aislamiento schema-per-tenant | RLS en instancia compartida basta para threat model actual | Solo si aparece requisito concreto de aislamiento mayor |
 | Secret scanning full-history en cada push | CI escanea diffs de PR + rango pusheado; full history = alert fatigue | Gitleaks + Trivy en CI; job programado si se necesita |
 

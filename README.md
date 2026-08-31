@@ -4,7 +4,7 @@
 
 Multi-tenant Agent Gateway / Control Plane for LLM agents — the **only path** between your application and the model. Every call authenticated, authorized, rate-limited, audited, and guarded.
 
-> Status: **MVP complete** — Phases 0-7 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **External Guardrail Classifier**). Phase 8 (CI/CD) deferred — see roadmap below.
+> Status: **MVP complete** — Phases 0-8 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **External Guardrail Classifier**, **CI/CD + Observability**).
 
 ## The problem
 
@@ -198,11 +198,6 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 
 | Item | Reason | Exit Criteria |
 |---|---|---|
-| Model routing / fallback (GPT-4o → Claude → Llama local) | Requires provider abstraction + pricing model first | Provider port + `PricingService` implemented |
-| Pricing / cost abstraction (model + tokens → USD) | Prices change per provider; needs versioned config | `PricingService` with provider/version matrix |
-| Tool sandbox (WASM via wazero) | **IMPLEMENTED** — `ToolExecutor` interface + `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS, no network, per-execution instantiation, bounded loop, HITL gate | ✅ Phase 6 complete |
-| External guardrail classifier (OpenAI / Anthropic / Llama Guard) | Adds network dependency, latency, cost, API keys | ✅ Phase 7 complete — `ExternalClassifier` adapter + composite merge |
-| Prometheus metrics / Grafana dashboards | **IMPLEMENTED** — Prometheus + Grafana + Alertmanager + Loki/Promtail for logs | ✅ Phase 8 complete |
 | Schema-per-tenant isolation | RLS on shared instance is sufficient for current threat model | Only if concrete requirement for stronger isolation appears |
 | Full-history secret scanning on every push | CI scans PR diffs + pushed range; full history = alert fatigue | Gitleaks + Trivy in CI; scheduled job if needed |
 
