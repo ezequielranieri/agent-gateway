@@ -3,26 +3,20 @@
 
 title = "agent-gateway gitleaks config"
 
-allowlist = [
-  { 
-    description = "False positives in OpenAPI spec examples"
-    files = ["internal/api/openapi.go"]
-    regexes = [
-      "eyJ[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+",
-      "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4uLi4="
-    ]
-  },
-  { 
-    description = "Example/staging environment files with placeholder secrets"
-    files = [
-      ".env.example",
-      ".env.staging",
-      ".env.prod"
-    ]
-    regexes = [
-      'POSTGRES_PASSWORD=.*',
-      'REDIS_PASSWORD=.*',
-      'JWT_SECRET=.*'
-    ]
-  }
-]
+[allowlist]
+  description = "Combined allowlist for false positives"
+  files = [
+    "internal/api/openapi.go",
+    ".env.example",
+    ".env.staging",
+    ".env.prod"
+  ]
+  regexes = [
+    # Example JWT tokens in OpenAPI spec comments
+    "eyJ[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+",
+    "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4uLi4=",
+    # Staging/prod env files with placeholder secrets
+    'POSTGRES_PASSWORD=.*',
+    'REDIS_PASSWORD=.*',
+    'JWT_SECRET=.*'
+  ]
