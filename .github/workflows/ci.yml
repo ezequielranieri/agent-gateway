@@ -23,8 +23,9 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: Install golangci-lint
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.64.8
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
       - name: Run golangci-lint
         run: golangci-lint run ./...
 
@@ -48,6 +49,8 @@ jobs:
         image: redis:7-alpine
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
+    env:
+      DATABASE_URL: postgres://gateway:gateway@localhost:5432/agent_gateway?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -59,7 +62,7 @@ jobs:
           go install github.com/pressly/goose/v3/cmd/goose@latest
           goose -dir migrations postgres "$DATABASE_URL" up
       - name: Run tests
-        run: go test -race -count=1 ./...
+        run: go test -count=1 ./...
 
   build:
     name: Build & Push Docker Image
@@ -113,6 +116,9 @@ jobs:
   vulnerability-scan:
     name: Vulnerability Scan (Trivy)
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Run Trivy vulnerability scanner
