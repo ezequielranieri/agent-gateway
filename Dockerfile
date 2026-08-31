@@ -15,8 +15,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Generate sqlc code
-RUN go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest && sqlc generate
+# Generate sqlc code (v1.30.0 compatible with Go 1.25)
+RUN go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 && sqlc generate
 
 # Build the binary
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-s -w" -o /app/gateway ./cmd/gateway
