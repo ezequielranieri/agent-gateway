@@ -86,14 +86,50 @@ type (
 		FailOpen                     bool `koanf:"fail_open"`
 	}
 
+	// RetryConfig holds retry configuration
+	RetryConfig struct {
+		MaxAttempts int           `koanf:"max_attempts"`
+		Backoff     time.Duration `koanf:"backoff"`
+	}
+
+	// CircuitBreakerConfig holds circuit breaker configuration
+	CircuitBreakerConfig struct {
+		FailureThreshold int           `koanf:"failure_threshold"`
+		Window           time.Duration `koanf:"window"`
+		ResetTimeout     time.Duration `koanf:"reset_timeout"`
+	}
+
+	// ExternalClassifierConfig holds configuration for external classifier (OpenAI, LlamaGuard, etc.)
+	ExternalClassifierConfig struct {
+		Enabled        bool              `koanf:"enabled"`
+		Type           string            `koanf:"type"`           // openai, anthropic, llamaguard, local
+		Config         map[string]string `koanf:"config"`         // api_key, endpoint, model
+		Thresholds     map[string]float64 `koanf:"thresholds"`    // per-category thresholds
+		Retry          RetryConfig       `koanf:"retry"`
+		CircuitBreaker CircuitBreakerConfig `koanf:"circuit_breaker"`
+		Timeout        time.Duration     `koanf:"timeout"`
+	}
+
+	// CompositeConfig holds configuration for composite guardrail (local + external)
+	CompositeConfig struct {
+		Mode                string             `koanf:"mode"`                 // sequential, parallel
+		FailBehavior        string             `koanf:"fail_behavior"`        // fallback_local, fail_open, fail_closed
+		MergeLogic          string             `koanf:"merge_logic"`          // any_violation, all_violation, weighted
+		ParallelBudgetMs    int                `koanf:"parallel_budget_ms"`
+		SendContentExternal bool               `koanf:"send_content_external"`
+		Thresholds          map[string]float64 `koanf:"thresholds"`
+	}
+
 	// GuardrailsConfig holds guardrails settings
 	GuardrailsConfig struct {
-		Enabled        bool                 `koanf:"enabled"`
-		PIIPatterns    PIIPatternsConfig    `koanf:"pii_patterns"`
-		InjectionPatterns []string          `koanf:"injection_patterns"`
-		Wordlist       WordlistConfig       `koanf:"wordlist"`
-		LengthLimits   LengthLimitsConfig   `koanf:"length_limits"`
-		Rules          []GuardrailRule      `koanf:"rules"` // Legacy custom rules
+		Enabled              bool                      `koanf:"enabled"`
+		PIIPatterns          PIIPatternsConfig         `koanf:"pii_patterns"`
+		InjectionPatterns    []string                  `koanf:"injection_patterns"`
+		Wordlist             WordlistConfig            `koanf:"wordlist"`
+		LengthLimits         LengthLimitsConfig        `koanf:"length_limits"`
+		Rules                []GuardrailRule           `koanf:"rules"` // Legacy custom rules
+		ExternalClassifier   *ExternalClassifierConfig `koanf:"external_classifier"`
+		Composite            CompositeConfig           `koanf:"composite"`
 	}
 
 	// PIIPatternsConfig holds PII detection settings

@@ -107,6 +107,50 @@ guardrails:
       severity: "critical"
       phase: "input"
 
+  # External Classifier (OpenAI Moderation, Llama Guard, etc.)
+  # Enable by setting enabled: true and providing API key via environment variable
+  external_classifier:
+    enabled: false
+    type: "openai"  # openai, anthropic, llamaguard, local
+    config:
+      api_key: "${OPENAI_API_KEY}"
+      endpoint: ""
+      model: "omni-moderation-latest"
+    thresholds:
+      sexual: 0.7
+      hate: 0.8
+      violence: 0.7
+      self-harm: 0.9
+      harassment: 0.7
+      "sexual/minors": 0.9
+      "violence/graphic": 0.8
+    retry:
+      max_attempts: 3
+      base_delay: "100ms"
+      max_delay: "5s"
+      backoff_multiplier: 2.0
+    circuit_breaker:
+      enabled: true
+      failure_threshold: 5
+      success_threshold: 2
+      timeout: "30s"
+      half_open_max_requests: 3
+    timeout: "5s"
+
+  # Composite Guardrail Configuration (merges local + external results)
+  composite:
+    mode: "sequential"           # sequential, parallel
+    fail_behavior: "fallback_local"  # fallback_local, fail_open, fail_closed
+    merge_logic: "any_violation"      # any_violation, all_violation, weighted
+    parallel_budget_ms: 500
+    send_content_external: true
+    thresholds:
+      sexual: 0.7
+      hate: 0.8
+      violence: 0.7
+      self-harm: 0.9
+      harassment: 0.7
+
 # HITL (Human-in-the-Loop) configuration
 hitl:
   default_ttl: "24h"

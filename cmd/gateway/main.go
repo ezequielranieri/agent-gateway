@@ -15,6 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/guardrail"
+	extguardrail "github.com/ezequielranieri/agent-gateway/internal/adapter/guardrail/external"
+	domainguardrail "github.com/ezequielranieri/agent-gateway/internal/domain/guardrail"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/pricing"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/tool/mock"
@@ -184,8 +186,51 @@ func main() {
 	// Initialize LocalGuardrail
 	localGuardrail := guardrail.NewLocalGuardrail(cfg.Guardrails, logger)
 
+	// Initialize External Classifier Factory
+	extFactory := extguardrail.NewClassifierFactory(logger)
+
+	// Create external classifier if configured
+	var externalClassifier domainguardrail.ExternalClassifier
+	if cfg.Guardrails.ExternalClassifier != nil && cfg.Guardrails.ExternalClassifier.Enabled {
+		// Convert map[string]string to map[string]interface{}
+		extConfig := make(map[string]interface{}, len(cfg.Guardrails.ExternalClassifier.Config))
+		for k, v := range cfg.Guardrails.ExternalClassifier.Config {
+			extConfig[k] = v
+		}
+
+		extCfg := extguardrail.ClassifierConfig{
+			Type:           cfg.Guardrails.ExternalClassifier.Type,
+			Config:         extConfig,
+			Thresholds:     cfg.Guardrails.ExternalClassifier.Thresholds,
+			Retry:          cfg.Guardrails.ExternalClassifier.Retry,
+			CircuitBreaker: cfg.Guardrails.ExternalClassifier.CircuitBreaker,
+			Timeout:        cfg.Guardrails.ExternalClassifier.Timeout,
+		}
+		ext, err := extFactory.CreateClassifier(context.Background(), extCfg, logger)
+		if err != nil {
+			logger.Warn().Err(err).Str("type", cfg.Guardrails.ExternalClassifier.Type).Msg("Failed to create external classifier, falling back to local only")
+		} else {
+			externalClassifier = ext
+			logger.Info().Str("type", cfg.Guardrails.ExternalClassifier.Type).Msg("External classifier initialized")
+		}
+	}
+
+	// Create Composite Guardrail (local + external)
+	compositeConfig := domainguardrail.CompositeConfig{
+		Mode:               cfg.Guardrails.Composite.Mode,
+		FailBehavior:       cfg.Guardrails.Composite.FailBehavior,
+		MergeLogic:         cfg.Guardrails.Composite.MergeLogic,
+		ParallelBudgetMs:   cfg.Guardrails.Composite.ParallelBudgetMs,
+		SendContentExternal: cfg.Guardrails.Composite.SendContentExternal,
+		Thresholds:         cfg.Guardrails.Composite.Thresholds,
+	}
+	compositeGuardrail := guardrail.NewCompositeGuardrail(localGuardrail, externalClassifier, compositeConfig, logger)
+
+	// Wrap with adapter to implement domain.Guardrail interface
+	compositeAdapter := guardrail.NewCompositeGuardrailAdapter(compositeGuardrail)
+
 	guardrailsMW := middleware.NewGuardrails(middleware.GuardrailsConfig{
-		Checker:   localGuardrail,
+		Checker:   compositeAdapter,
 		AuditRepo: auditRepo,
 		Logger:    logger,
 	})

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ezequielranieri/agent-gateway/internal/config"
 	"github.com/rs/zerolog"
 )
 
@@ -15,6 +16,10 @@ var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker open")
 	ErrMaxRetriesExceeded = errors.New("max retries exceeded")
 )
+
+// Use config package types
+type RetryConfig = config.RetryConfig
+type CircuitBreakerConfig = config.CircuitBreakerConfig
 
 // CircuitBreakerState represents the state of a circuit breaker
 type CircuitBreakerState int
@@ -24,22 +29,6 @@ const (
 	CircuitBreakerOpen
 	CircuitBreakerHalfOpen
 )
-
-// CircuitBreakerConfig holds circuit breaker configuration
-type CircuitBreakerConfig struct {
-	FailureThreshold int           `koanf:"failure_threshold"`
-	Window           time.Duration `koanf:"window"`
-	ResetTimeout     time.Duration `koanf:"reset_timeout"`
-}
-
-// DefaultCircuitBreakerConfig returns default circuit breaker configuration
-func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
-	return CircuitBreakerConfig{
-		FailureThreshold: 5,
-		Window:           30 * time.Second,
-		ResetTimeout:     60 * time.Second,
-	}
-}
 
 // CircuitBreaker implements a thread-safe circuit breaker
 type CircuitBreaker struct {
@@ -117,13 +106,9 @@ func (cb *CircuitBreaker) recordResult(err error) {
 			cb.logger.Warn().Msg("Circuit breaker reopened after half-open failure")
 		} else if cb.failureCount >= cb.config.FailureThreshold {
 			cb.state = CircuitBreakerOpen
-			cb.logger.Warn().
-				Int("failure_count", cb.failureCount).
-				Int("threshold", cb.config.FailureThreshold).
-				Msg("Circuit breaker opened")
+			cb.logger.Warn().Msg("Circuit breaker opened due to failure threshold")
 		}
 	} else {
-		// Success
 		if cb.state == CircuitBreakerHalfOpen {
 			cb.successesInHalfOpen++
 			if cb.successesInHalfOpen >= 2 {
@@ -158,32 +143,35 @@ func (s CircuitBreakerState) String() string {
 	}
 }
 
-// RetryConfig holds retry configuration
-type RetryConfig struct {
-	MaxAttempts int           `koanf:"max_attempts"`
-	Backoff     time.Duration `koanf:"backoff"`
+// HTTPClientConfig holds HTTP client configuration for external classifiers
+type HTTPClientConfig struct {
+	Timeout        time.Duration              `koanf:"timeout"`
+	Retry          config.RetryConfig         `koanf:"retry"`
+	CircuitBreaker config.CircuitBreakerConfig `koanf:"circuit_breaker"`
 }
 
 // DefaultRetryConfig returns default retry configuration
-func DefaultRetryConfig() RetryConfig {
-	return RetryConfig{
-		MaxAttempts: 2, // 1 retry + original
+func DefaultRetryConfig() config.RetryConfig {
+	return config.RetryConfig{
+		MaxAttempts: 2,
 		Backoff:     500 * time.Millisecond,
 	}
 }
 
-// HTTPClientConfig holds HTTP client configuration for external classifiers
-type HTTPClientConfig struct {
-	Timeout       time.Duration       `koanf:"timeout"`
-	Retry         RetryConfig         `koanf:"retry"`
-	CircuitBreaker CircuitBreakerConfig `koanf:"circuit_breaker"`
+// DefaultCircuitBreakerConfig returns default circuit breaker configuration
+func DefaultCircuitBreakerConfig() config.CircuitBreakerConfig {
+	return config.CircuitBreakerConfig{
+		FailureThreshold: 5,
+		Window:           30 * time.Second,
+		ResetTimeout:     60 * time.Second,
+	}
 }
 
 // DefaultHTTPClientConfig returns default HTTP client configuration
 func DefaultHTTPClientConfig() HTTPClientConfig {
 	return HTTPClientConfig{
-		Timeout:       5 * time.Second,
-		Retry:         DefaultRetryConfig(),
+		Timeout:        5 * time.Second,
+		Retry:          DefaultRetryConfig(),
 		CircuitBreaker: DefaultCircuitBreakerConfig(),
 	}
 }
@@ -191,7 +179,7 @@ func DefaultHTTPClientConfig() HTTPClientConfig {
 // GuardrailHTTPClient wraps HTTP client with retry and circuit breaker
 type GuardrailHTTPClient struct {
 	client       *http.Client
-	retryConfig  RetryConfig
+	retryConfig  config.RetryConfig
 	breaker      *CircuitBreaker
 	logger       zerolog.Logger
 }
@@ -226,34 +214,35 @@ func (c *GuardrailHTTPClient) Do(ctx context.Context, req *http.Request) (*http.
 					Int("attempt", attempt+1).
 					Int("max_attempts", c.retryConfig.MaxAttempts+1).
 					Msg("HTTP request returned 5xx, retrying")
-				// Continue to next attempt
-			} else {
-				// Success or non-retryable status
-				return resp, nil
+				continue
 			}
+			return resp, nil
 		}
 
+		// Log the error
 		c.logger.Debug().
 			Err(err).
 			Int("attempt", attempt+1).
 			Int("max_attempts", c.retryConfig.MaxAttempts+1).
 			Msg("HTTP request failed")
 
-		// Check if we should retry
-		if attempt < c.retryConfig.MaxAttempts {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(c.retryConfig.Backoff):
-				// Continue to next attempt
-			}
+		// If this is the last attempt, return the error
+		if attempt == c.retryConfig.MaxAttempts {
+			return nil, fmt.Errorf("max retries exceeded: %w", err)
+		}
+
+		// Wait before retry
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(c.retryConfig.Backoff):
 		}
 	}
 
-	return nil, fmt.Errorf("max retries exceeded")
+	return nil, ErrMaxRetriesExceeded
 }
 
-// Close closes the HTTP client
+// Close releases resources
 func (c *GuardrailHTTPClient) Close() error {
 	return nil
 }

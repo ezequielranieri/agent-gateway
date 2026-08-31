@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	domainguardrail "github.com/ezequielranieri/agent-gateway/internal/domain/guardrail"
 	domainmodel "github.com/ezequielranieri/agent-gateway/internal/domain/model"
 	domaintypes "github.com/ezequielranieri/agent-gateway/internal/domain/tool"
@@ -568,4 +569,84 @@ func (c *CompositeGuardrail) Close() error {
 		return fmt.Errorf("close failed: %v", errs)
 	}
 	return nil
+}
+
+// CompositeGuardrailAdapter adapts CompositeGuardrail to implement domain.Guardrail
+// This is needed because Go doesn't allow methods with same name but different return types
+type CompositeGuardrailAdapter struct {
+	composite *CompositeGuardrail
+}
+
+// NewCompositeGuardrailAdapter creates a new adapter
+func NewCompositeGuardrailAdapter(composite *CompositeGuardrail) *CompositeGuardrailAdapter {
+	return &CompositeGuardrailAdapter{composite: composite}
+}
+
+// CheckInput implements domain.Guardrail interface
+func (a *CompositeGuardrailAdapter) CheckInput(ctx context.Context, tenantID domain.UUID, input string) (*domain.GuardrailViolation, error) {
+	result, err := a.composite.classify(ctx, tenantID.String(), input, true)
+	if err != nil {
+		return nil, err
+	}
+	return a.classificationToViolation(tenantID, result, domain.GuardrailPhaseInput), nil
+}
+
+// CheckOutput implements domain.Guardrail interface
+func (a *CompositeGuardrailAdapter) CheckOutput(ctx context.Context, tenantID domain.UUID, output string) (*domain.GuardrailViolation, error) {
+	result, err := a.composite.classify(ctx, tenantID.String(), output, false)
+	if err != nil {
+		return nil, err
+	}
+	return a.classificationToViolation(tenantID, result, domain.GuardrailPhaseOutput), nil
+}
+
+// SanitizeOutput implements domain.Guardrail interface
+// Delegates to local guardrail if available, otherwise returns original
+func (a *CompositeGuardrailAdapter) SanitizeOutput(output string) string {
+	if a.composite.local != nil {
+		if lg, ok := a.composite.local.(interface{ SanitizeOutput(string) string }); ok {
+			return lg.SanitizeOutput(output)
+		}
+	}
+	return output
+}
+
+// classificationToViolation converts ClassificationResult to GuardrailViolation
+func (a *CompositeGuardrailAdapter) classificationToViolation(tenantID domain.UUID, result domainguardrail.ClassificationResult, phase domain.GuardrailPhase) *domain.GuardrailViolation {
+	if !result.Violated || len(result.Categories) == 0 {
+		return nil
+	}
+
+	// Pick the highest confidence violation
+	var bestCat domainguardrail.CategoryResult
+	for _, cat := range result.Categories {
+		if cat.Detected && cat.Confidence > bestCat.Confidence {
+			bestCat = cat
+		}
+	}
+
+	if bestCat.Category == "" {
+		return nil
+	}
+
+	// Determine severity based on confidence and threshold
+	severity := "warn"
+	if bestCat.Confidence >= bestCat.Threshold {
+		severity = "critical"
+	}
+
+	// Build context JSON
+	contextJSON := fmt.Sprintf(`{"category":"%s","confidence":%.2f,"threshold":%.2f,"provider":"%s"}`,
+		bestCat.Category, bestCat.Confidence, bestCat.Threshold, result.Provider)
+
+	return &domain.GuardrailViolation{
+		ID:        domain.NewUUID(),
+		TenantID:  tenantID,
+		Phase:     phase,
+		Rule:      bestCat.Category,
+		Severity:  severity,
+		Message:   fmt.Sprintf("External classifier '%s' detected violation: %s", result.Provider, bestCat.Category),
+		Context:   contextJSON,
+		CreatedAt: domain.Now(),
+	}
 }

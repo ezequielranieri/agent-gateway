@@ -12,6 +12,7 @@ import (
 
 	"github.com/ezequielranieri/agent-gateway/internal/config"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
+	domainguardrail "github.com/ezequielranieri/agent-gateway/internal/domain/guardrail"
 )
 
 // LocalGuardrail implements the Guardrail interface with local regex/wordlist rules
@@ -396,4 +397,76 @@ func (g *LocalGuardrail) MarshalJSON() ([]byte, error) {
 		RulesCount:  len(g.compiled),
 		PIIPatterns: len(g.piiRegexes),
 	})
+}
+
+// ---- ExternalClassifier interface implementation ----
+
+// Name returns the classifier name
+func (g *LocalGuardrail) Name() string {
+	return "local"
+}
+
+// ClassifyInput classifies input text using local rules
+func (g *LocalGuardrail) ClassifyInput(ctx context.Context, text string) (domainguardrail.ClassificationResult, error) {
+	violation, err := g.CheckInput(ctx, domain.NewUUID(), text)
+	if err != nil {
+		return domainguardrail.ClassificationResult{}, err
+	}
+	return g.violationToClassification(violation, "local"), nil
+}
+
+// ClassifyOutput classifies output text using local rules
+func (g *LocalGuardrail) ClassifyOutput(ctx context.Context, text string) (domainguardrail.ClassificationResult, error) {
+	violation, err := g.CheckOutput(ctx, domain.NewUUID(), text)
+	if err != nil {
+		return domainguardrail.ClassificationResult{}, err
+	}
+	return g.violationToClassification(violation, "local"), nil
+}
+
+// HealthCheck verifies the classifier is reachable
+func (g *LocalGuardrail) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+// Close releases resources
+func (g *LocalGuardrail) Close() error {
+	return nil
+}
+
+// violationToClassification converts GuardrailViolation to ClassificationResult
+func (g *LocalGuardrail) violationToClassification(v *domain.GuardrailViolation, provider string) domainguardrail.ClassificationResult {
+	if v == nil {
+		return domainguardrail.ClassificationResult{
+			Violated:  false,
+			Categories: []domainguardrail.CategoryResult{},
+			Provider:  provider,
+		}
+	}
+
+	severity := v.Severity
+	if severity == "" {
+		severity = "warn"
+	}
+
+	confidence := 0.9
+	if severity == "critical" {
+		confidence = 0.95
+	} else if severity == "warn" {
+		confidence = 0.7
+	}
+
+	return domainguardrail.ClassificationResult{
+		Violated:  true,
+		Categories: []domainguardrail.CategoryResult{
+			{
+				Category:   v.Rule,
+				Detected:   true,
+				Confidence: confidence,
+				Threshold:  0.7,
+			},
+		},
+		Provider: provider,
+		Model:    "local",
+	}
 }
