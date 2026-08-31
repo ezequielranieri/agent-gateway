@@ -19,6 +19,8 @@ vendor/
 # Environment
 .env
 .env.local
+.env.staging
+.env.prod
 
 # Docker
 docker-compose.override.yml
