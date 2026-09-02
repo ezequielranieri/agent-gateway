@@ -1,8 +1,6 @@
 services:
   postgres:
     image: postgres:16-alpine
-    env_file:
-      - .env.production
     environment:
       POSTGRES_DB: agent_gateway
       POSTGRES_USER: gateway
@@ -28,9 +26,9 @@ services:
 
   redis:
     image: redis:7-alpine
-    env_file:
-      - .env.production
-    command: sh -c "redis-server --requirepass \"$${REDIS_PASSWORD}\" --maxmemory 512mb --maxmemory-policy allkeys-lru"
+    command: sh -c "redis-server --requirepass $${REDIS_PASSWORD} --maxmemory 512mb --maxmemory-policy allkeys-lru"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     ports:
       - "6379:6379"
     healthcheck:
@@ -53,8 +51,6 @@ services:
       context: .
       dockerfile: Dockerfile
     image: agent-gateway:${VERSION:-latest}
-    env_file:
-      - .env.production
     environment:
       - AG_DATABASE_DSN=postgres://gateway:${POSTGRES_PASSWORD_ENCODED}@postgres:5432/agent_gateway?sslmode=disable
       - AG_REDIS_ADDR=redis:6379
@@ -153,8 +149,6 @@ services:
     image: grafana/grafana:10.1.0
     ports:
       - "3000:3000"
-    env_file:
-      - .env.production
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}

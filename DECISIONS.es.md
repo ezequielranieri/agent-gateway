@@ -242,7 +242,7 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 **Trade-off:** Adds provider abstraction layer; pricing tables must be maintained.
 
-**Implemented:** OpenAI adapter (full), Anthropic/Ollama adapters (stubbed), `FallbackChain` with bounded retries + half-open circuit breaker, `PricingService` with versioned tables, pre-estimate/post-actual cost tracking integrated with rate-limit and audit.
+**Implementado:** Adapter OpenAI (completo), adapters Anthropic/Ollama (stubbed), `FallbackChain` con retries acotados + circuit breaker half-open, `PricingService` con tablas versionadas (migración 0014 poblada con modelos OpenAI, Anthropic, Ollama), pre-estimación/post-costo real integrado con rate-limit y audit.
 
 ---
 

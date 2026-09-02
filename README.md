@@ -4,7 +4,7 @@
 
 Multi-tenant Agent Gateway / Control Plane for LLM agents — the **only path** between your application and the model. Every call authenticated, authorized, rate-limited, audited, and guarded.
 
-> Status: **MVP complete** — Phases 0-8 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **External Guardrail Classifier**, **CI/CD + Observability**).
+> Status: **MVP complete** — Phases 0-8 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **External Guardrail Classifier**, **CI/CD + Observability**). **Pricing tables (migration 0014)** seeded with OpenAI, Anthropic, and Ollama model costs.
 
 ## The problem
 
@@ -55,7 +55,7 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 │  guardrail/ (ExternalClassifier — OpenAI/Anthropic/LlamaGuard)     │
 │  hitl/      (SSE handler + PG state machine)                       │
 │  provider/  (OpenAI, Anthropic, Ollama, Mock)                      │
-│  pricing/   (versioned price tables)                               │
+│  pricing/   (versioned price tables, migration 0014 seeded)           │
 │  tool/      (WasmExecutor — wazero, MockExecutor — tests)          │
 └─────────────────────────────────────────────────────────────────────┘
 
@@ -121,7 +121,11 @@ Requires: Go 1.22+, Docker with Compose.
 # 1. start db + redis, apply migrations
 make docker-up
 make migrate-up
+```
 
+14 migrations will run (0001_extensions through 0014_pricing_tables).
+
+```bash
 # 2. configure the app
 cp .env.example .env          # set DATABASE_URL, JWT_SECRET (never "change-me")
 

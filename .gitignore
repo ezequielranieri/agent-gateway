@@ -20,7 +20,11 @@ vendor/
 .env
 .env.local
 .env.staging
+.env.staging.bak*
 .env.prod
+.env.production
+.env.production.bak*
+.env.*.enc
 
 # Docker
 docker-compose.override.yml

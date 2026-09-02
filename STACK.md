@@ -15,7 +15,7 @@
 
 | Capa | Tecnología | Notas |
 |---|---|---|
-| Base de datos | PostgreSQL 16 | Fuente de verdad (ACID) + Row Level Security FORCE como defensa en profundidad. Multi-tenancy vía tenant_id + PK compuesta |
+| Base de datos | PostgreSQL 16 | Fuente de verdad (ACID) + Row Level Security FORCE como defensa en profundidad. Multi-tenancy vía tenant_id + PK compuesta. **Tablas pricing (migración 0014)** con versionado de precios por proveedor/modelo |
 | Queries | sqlc + pgx | Complementarios: sqlc genera código type-safe sobre pgx |
 | Migraciones | goose | Obligatorio — sqlc no gestiona schema |
 | Caché / Rate Limit | Redis 7 + redis_rate | Token bucket (requests, tokens, tool_execs) |
