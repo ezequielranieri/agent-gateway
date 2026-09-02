@@ -86,4 +86,4 @@ LPT9
 keys/
 
 # Migrations
-migrations/down/
+migrations/down/CREDENTIAL_ROTATION.md
