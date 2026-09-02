@@ -9,6 +9,12 @@ creation_rules:
       - age1j8xenp06wzj06y78kkh007ms3nnp82wezwaskfgafegvyq0yfdxq0ynf8d
     encrypted_regex: '^(POSTGRES_PASSWORD|REDIS_PASSWORD|JWT_SECRET|WEBHOOK_URL)$'
 
+  - path_regex: \.env\.production$
+    age:
+      - age1xwxe5ewyz726sxpyg7scrtyv4hwg6cdkl8pc5v2jdfnpe2pl6ceqm2n5cs
+      - age1j8xenp06wzj06y78kkh007ms3nnp82wezwaskfgafegvyq0yfdxq0ynf8d
+    encrypted_regex: '^(POSTGRES_PASSWORD|REDIS_PASSWORD|JWT_SECRET|WEBHOOK_URL)$'
+
   - path_regex: \.env\.staging$
     age:
       - age1xwxe5ewyz726sxpyg7scrtyv4hwg6cdkl8pc5v2jdfnpe2pl6ceqm2n5cs
