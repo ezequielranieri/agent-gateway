@@ -76,6 +76,7 @@ func main() {
 	reviewRepo := postgres.NewReviewRepository(dbPool)
 	tenantRepo := postgres.NewTenantRepository(dbPool)
 	roleRepo := postgres.NewRoleRepository(dbPool)
+	delegationRepo := postgres.NewDelegationRepository(dbPool)
 
 	// Initialize JWT adapter
 	// Generate a random signing key if not provided
@@ -239,12 +240,26 @@ func main() {
 		Logger: logger,
 	})
 
+	// Initialize Redis-backed delegation budget decrementor
+	delegationBudgetDec := redisadapter.NewRedisBudgetDecrementor(redisClient, logger)
+
+	// Initialize delegation middleware (fail-fast: panics if required deps are nil)
+	delegationMW := middleware.NewDelegation(middleware.DelegationConfig{
+		Repository:   delegationRepo,
+		BudgetDec:    delegationBudgetDec,
+		MaxDepth:     5,
+		MaxFanOut:    10,
+		Logger:       logger,
+		FailOpen:     false,
+	})
+
 	// Create router with auth handlers
 	router := api.NewRouter(api.RouterConfig{
 		Config:                 cfg,
 		Logger:                 logger,
 		AuthMW:                 authMW,
 		TenantMW:               tenantMW,
+		DelegationMW:           delegationMW,
 		RateLimitMW:            rateLimitMW,
 		AuditMW:                auditMW,
 		GuardrailsMW:           guardrailsMW,

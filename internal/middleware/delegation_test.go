@@ -621,3 +621,64 @@ func TestDelegationMW_ChiIntegration(t *testing.T) {
 	r.ServeHTTP(rr, req)
 	assert.Equal(t, http.StatusOK, rr.Code)
 }
+
+// TestDelegationMW_RouterConfigInvalidGrantBlocked verifies that a request
+// with an invalid grant is blocked at 403 when DelegationMW is in the chain
+// via a real RouterConfig-style composition (not just a raw chi router).
+func TestDelegationMW_RouterConfigInvalidGrantBlocked(t *testing.T) {
+	cfg := testDelegationConfig()
+
+	// Simulate the real router composition pattern: AuthMW → TenantMW → DelegationMW → handler
+	chainMW := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Simulate TenantMW injecting a tenant ID
+			ctx := context.WithValue(r.Context(), TenantIDKey, domain.NewUUID())
+			r = r.WithContext(ctx)
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	r := chi.NewRouter()
+	r.Use(chainMW)
+	r.Use(NewDelegation(cfg))
+
+	r.Get("/test", func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("Should not reach handler for invalid grant")
+	})
+
+	// Inject a revoked grant to test rejection:
+	tenantID := domain.NewUUID()
+	revokedGrant := &delegation.Grant{
+		GrantID:          domain.NewUUID(),
+		ChainID:          domain.NewUUID(),
+		TenantID:         tenantID,
+		DelegateIdentity: "agent-1",
+		GrantedScope:     delegation.NewScopeSet([]string{"read:data"}),
+		Depth:            1,
+		ExpiresAt:        time.Now().Add(1 * time.Hour),
+		BudgetRemaining:  100,
+		Status:           delegation.GrantStatusRevoked,
+	}
+
+	// Re-configure chain to inject both tenant and revoked grant
+	chainWithGrant := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), TenantIDKey, tenantID)
+			ctx = context.WithValue(ctx, GrantKey{}, revokedGrant)
+			r = r.WithContext(ctx)
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	r2 := chi.NewRouter()
+	r2.Use(chainWithGrant)
+	r2.Use(NewDelegation(cfg))
+	r2.Get("/test", func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("Should not reach handler for revoked grant")
+	})
+
+	rr2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	r2.ServeHTTP(rr2, req2)
+	assert.Equal(t, http.StatusForbidden, rr2.Code, "revoked grant must be rejected via DelegationMW")
+}

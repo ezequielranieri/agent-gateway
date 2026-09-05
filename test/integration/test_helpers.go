@@ -502,12 +502,25 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 		Logger: logger,
 	})
 
+	// Initialize delegation middleware with real Redis budget decrementor
+	delegationRepo := pgadapter.NewDelegationRepository(tc.DBPool)
+	delegationBudgetDec := redisadapter.NewRedisBudgetDecrementor(tc.RedisClient, logger)
+	delegationMW := middleware.NewDelegation(middleware.DelegationConfig{
+		Repository:   delegationRepo,
+		BudgetDec:    delegationBudgetDec,
+		MaxDepth:     5,
+		MaxFanOut:    10,
+		Logger:       logger,
+		FailOpen:     true,
+	})
+
 	// Create router
 	router := api.NewRouter(api.RouterConfig{
 		Config:              &config.Config{RateLimit: config.RateLimitConfig{FailOpen: true}},
 		Logger:              logger,
 		AuthMW:              authMW,
 		TenantMW:            tenantMW,
+		DelegationMW:        delegationMW,
 		RateLimitMW:         rateLimitMW,
 		AuditMW:             auditMW,
 		GuardrailsMW:        middleware.NewGuardrails(middleware.GuardrailsConfig{Checker: &noopGuardrailChecker{}, Logger: logger}),

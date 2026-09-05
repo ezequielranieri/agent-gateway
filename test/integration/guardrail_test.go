@@ -236,6 +236,18 @@ func CreateTestRouterWithRealGuardrails(t *testing.T, tc *TestContainer, logger 
 		Logger: logger,
 	})
 
+	// Initialize delegation middleware with real Redis budget decrementor
+	delegationRepo := pgadapter.NewDelegationRepository(tc.DBPool)
+	delegationBudgetDec := redis.NewRedisBudgetDecrementor(tc.RedisClient, logger)
+	delegationMW := middleware.NewDelegation(middleware.DelegationConfig{
+		Repository:   delegationRepo,
+		BudgetDec:    delegationBudgetDec,
+		MaxDepth:     5,
+		MaxFanOut:    10,
+		Logger:       logger,
+		FailOpen:     true,
+	})
+
 	// Create LocalGuardrail with test config
 	guardrailConfig := config.GuardrailsConfig{
 		Enabled: true,
@@ -289,6 +301,7 @@ func CreateTestRouterWithRealGuardrails(t *testing.T, tc *TestContainer, logger 
 		Logger:              logger,
 		AuthMW:              authMW,
 		TenantMW:            tenantMW,
+		DelegationMW:        delegationMW,
 		RateLimitMW:         rateLimitMW,
 		AuditMW:             auditMW,
 		GuardrailsMW:        guardrailsMW,

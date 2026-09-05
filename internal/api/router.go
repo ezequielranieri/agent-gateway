@@ -20,6 +20,7 @@ type RouterConfig struct {
 	Logger                 zerolog.Logger
 	AuthMW                 func(http.Handler) http.Handler
 	TenantMW               func(http.Handler) http.Handler
+	DelegationMW           func(http.Handler) http.Handler
 	RateLimitMW            func(http.Handler) http.Handler
 	AuditMW                func(http.Handler) http.Handler
 	GuardrailsMW           func(http.Handler) http.Handler
@@ -88,6 +89,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				// Apply tenant middleware chain
 				r.Use(cfg.AuthMW)
 				r.Use(cfg.TenantMW)
+				r.Use(cfg.DelegationMW)
 				r.Use(cfg.RateLimitMW)
 				r.Use(cfg.AuditMW)
 				r.Use(cfg.GuardrailsMW)
@@ -141,6 +143,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		r.Route("/reviews", func(r chi.Router) {
 			r.Use(cfg.AuthMW)
 			r.Use(cfg.TenantMW)
+			r.Use(cfg.DelegationMW)
 			r.Use(cfg.RateLimitMW)
 			r.Use(cfg.AuditMW)
 			r.Use(cfg.GuardrailsMW)
@@ -170,6 +173,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		r.Route("/chat", func(r chi.Router) {
 			r.Use(cfg.AuthMW)
 			r.Use(cfg.TenantMW)
+			r.Use(cfg.DelegationMW)
 			r.Use(cfg.RateLimitMW)
 			r.Use(cfg.AuditMW)
 			r.Use(cfg.GuardrailsMW)
