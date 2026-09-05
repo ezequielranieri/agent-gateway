@@ -64,6 +64,7 @@ type Grant struct {
 	RootIntent        string       `json:"root_intent"`
 	HITLClassification string     `json:"hitl_classification"`
 	Depth             int          `json:"depth"`
+	Generation        int          `json:"generation"`
 	ExpiresAt         time.Time    `json:"expires_at"`
 	BudgetRemaining   int          `json:"budget_remaining"`
 	Status            GrantStatus  `json:"status"`
