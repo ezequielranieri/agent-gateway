@@ -1,0 +1,18 @@
+id: cross-tenant-delegation-leak
+description: Grant created outside parent tenant context or executed with delegate's tenant
+spec_ref: "9.0a::agent-delegation::cross-tenant-grant-rejection"
+severity: critical
+setup:
+  - create_tenant: parent_tenant
+  - create_tenant: attacker_tenant
+  - create_agent: parent_agent (tenant: parent_tenant, scope: ["read:data"])
+  - create_agent: attacker_agent (tenant: attacker_tenant)
+action:
+  delegate:
+    from: parent_agent
+    to: attacker_agent
+    granted_scope: ["read:data"]
+expect:
+  blocked: true
+  reason: "cross_tenant_delegation_prohibited"
+  grant_issued: false

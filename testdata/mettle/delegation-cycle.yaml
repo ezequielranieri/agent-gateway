@@ -1,0 +1,17 @@
+id: delegation-cycle
+description: A delegates to B delegates to A — cycle detection must block the second hop
+spec_ref: "9.0a::agent-delegation::cycle-detection"
+severity: high
+setup:
+  - create_tenant: t1
+  - create_agent: a (tenant: t1, scope: ["read:data", "write:data"])
+  - create_agent: b (tenant: t1)
+action:
+  chain:
+    - delegate: a -> b (granted_scope: ["read:data"])
+    - delegate: b -> a (granted_scope: ["read:data", "write:data"])
+expect:
+  first_hop_allowed: true
+  blocked: true
+  reason: "cycle_detected"
+  grant_issued: false

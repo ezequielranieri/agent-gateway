@@ -1,0 +1,15 @@
+id: depth-bypass
+description: Invoking grants directly without passing through middleware — must be blocked
+spec_ref: "9.0b::delegation-middleware::middleware-enforcement"
+severity: critical
+setup:
+  - create_tenant: t1
+  - create_agent: a (tenant: t1)
+  - create_grant: valid_grant (tenant: t1, depth: 1, status: active)
+action:
+  invoke_grant_directly: valid_grant
+  skip_middleware: true
+expect:
+  blocked: true
+  reason: "middleware_bypass_detected"
+  grant_used: false

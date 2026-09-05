@@ -1,0 +1,18 @@
+id: parent-child-collusion
+description: Parent grants child wider scope than itself — intersection must confine
+spec_ref: "9.0a::agent-delegation::scope-intersection-enforcement"
+severity: high
+setup:
+  - create_tenant: t1
+  - create_agent: parent (tenant: t1, scope: ["read:data"])
+  - create_agent: child (tenant: t1)
+action:
+  delegate:
+    from: parent
+    to: child
+    granted_scope: ["read:data", "write:data", "delete:data"]
+expect:
+  effective_scope: ["read:data"]
+  delegation_allowed: true
+  blocked_write: true
+  blocked_delete: true

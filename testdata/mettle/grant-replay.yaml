@@ -1,0 +1,15 @@
+id: grant-replay
+description: Replay a consumed or revoked grant — must be rejected at authorization boundary
+spec_ref: "9.0a::agent-delegation::grant-lifecycle"
+severity: high
+setup:
+  - create_tenant: t1
+  - create_agent: a (tenant: t1)
+  - create_agent: b (tenant: t1)
+  - create_grant: g1 (tenant: t1, delegate: b, status: consumed)
+action:
+  invoke_grant: g1
+expect:
+  blocked: true
+  reason: "grant_revoked_or_consumed"
+  grant_used: false

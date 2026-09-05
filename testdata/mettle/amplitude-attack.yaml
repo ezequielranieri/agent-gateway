@@ -1,0 +1,17 @@
+id: amplitude-attack
+description: Depth-limited chain spawns wide fan-out to exhaust budget pool
+spec_ref: "9.0a::agent-delegation::hard-limits"
+severity: high
+setup:
+  - create_tenant: t1
+  - create_agent: root (tenant: t1, budget: 100)
+  - create_agents: 50 children (tenant: t1)
+action:
+  chain:
+    - root fans_out: 50 children (each granted_scope: ["read:data"])
+    - each child attempts fan_out: 10 grandchildren
+expect:
+  blocked_at_fanout: true
+  reason: "fan_out_limit_exceeded"
+  budget_exhausted: true
+  max_children_created: 10

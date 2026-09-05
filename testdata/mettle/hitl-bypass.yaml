@@ -1,0 +1,18 @@
+id: hitl-bypass
+description: Chain re-packages WRITE (HITL-required) as READ to evade human approval
+spec_ref: "9.0a::agent-delegation::hitl-immutability-from-root"
+severity: critical
+setup:
+  - create_tenant: t1
+  - create_agent: root (tenant: t1, intent: "delete:records", hitl_classification: required)
+  - create_agent: mid (tenant: t1)
+  - create_agent: leaf (tenant: t1)
+action:
+  chain:
+    - delegate: root -> mid (granted_scope: ["read:records"])
+    - delegate: mid -> leaf (granted_scope: ["read:records"])
+expect:
+  hitl_required: true
+  evaluated_against_root: true
+  root_intent_preserved: "delete:records"
+  blocked_without_approval: true

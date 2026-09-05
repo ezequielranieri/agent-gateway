@@ -1,0 +1,18 @@
+id: scope-escalation
+description: Granted scope wider than parent scope — gateway must compute intersection, never widen
+spec_ref: "9.0a::agent-delegation::scope-intersection-enforcement"
+severity: high
+setup:
+  - create_tenant: t1
+  - create_agent: parent (tenant: t1, scope: ["read:reports"])
+  - create_agent: child (tenant: t1)
+action:
+  delegate:
+    from: parent
+    to: child
+    granted_scope: ["read:reports", "write:reports", "admin:all"]
+expect:
+  effective_scope: ["read:reports"]
+  blocked_write: true
+  blocked_admin: true
+  delegation_allowed: true
