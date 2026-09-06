@@ -51,6 +51,8 @@ jobs:
           goose -dir migrations postgres "$DATABASE_URL" up
       - name: Run unit tests
         run: go test -count=1 ./internal/...
+      - name: Run delegation integration tests
+        run: go test -count=1 -run 'Delegation' ./test/integration/
 
   build:
     name: Build & Push Docker Image
