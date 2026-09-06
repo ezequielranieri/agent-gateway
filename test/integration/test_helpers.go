@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx/v5" driver for wait.ForSQL
+	"github.com/moby/moby/api/types/network"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -19,11 +21,11 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
-	"github.com/ezequielranieri/agent-gateway/internal/adapter/provider/mock"
-	"github.com/ezequielranieri/agent-gateway/internal/adapter/pricing"
-	toolMock "github.com/ezequielranieri/agent-gateway/internal/adapter/tool/mock"
 	pgadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/pricing"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/provider/mock"
 	redisadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
+	toolMock "github.com/ezequielranieri/agent-gateway/internal/adapter/tool/mock"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
 	"github.com/ezequielranieri/agent-gateway/internal/api/handlers"
 	"github.com/ezequielranieri/agent-gateway/internal/config"
@@ -49,13 +51,21 @@ type TestContainer struct {
 func SetupTestContainers(t *testing.T) *TestContainer {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 
-	// Start PostgreSQL container
+	// Start PostgreSQL container.
+	// Use wait.ForSQL (SELECT 1 + retries) instead of a log-message wait:
+	// the "ready to accept connections" log line can appear before Postgres
+	// actually accepts connections, causing SQLSTATE 57P03 "database system is
+	// starting up" races on slow runners.
 	pgContainer, err := pgmodule.Run(ctx,
 		"postgres:16-alpine",
 		pgmodule.WithDatabase("agent_gateway"),
 		pgmodule.WithUsername("postgres"),
 		pgmodule.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(wait.ForLog("database system is ready to accept connections")),
+		testcontainers.WithWaitStrategy(wait.ForSQL("5432/tcp", "pgx/v5",
+			func(host string, port network.Port) string {
+				return fmt.Sprintf("postgres://postgres:postgres@%s:%s/agent_gateway?sslmode=disable", host, port.Port())
+			},
+		)),
 	)
 	require.NoError(t, err)
 
@@ -405,15 +415,15 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 
 	// Initialize HITL use case
 	hitlUC := hitl.NewHITLUseCase(hitl.HITLConfig{
-		ReviewRepo:   reviewRepo,
-		AuditRepo:    auditRepo,
-		DefaultTTL:   24 * time.Hour,
-		Logger:       logger,
+		ReviewRepo: reviewRepo,
+		AuditRepo:  auditRepo,
+		DefaultTTL: 24 * time.Hour,
+		Logger:     logger,
 	})
 
 	// Initialize handlers
 	authHandlers := handlers.NewAuthHandlers(authUC, nil, logger)
-	
+
 	// Initialize mock chat usecase for tests
 	mockProvider := mock.NewProvider(
 		mock.WithName("test-mock"),
@@ -421,7 +431,7 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 		mock.WithEnabled(true),
 	)
 	mockProvider.SetFixedLatency(10 * time.Millisecond)
-	
+
 	// Create test pricing service
 	testPriceTable := &pricing.PriceTable{
 		Version:  "test",
@@ -435,28 +445,28 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 		Description:   "Test pricing",
 	}
 	mockPricing := pricing.NewTestService(pricing.WithTable(testPriceTable))
-	
+
 	// Build registry with mock provider
 	mockRegistry := chat.NewProviderRegistry(logger)
 	mockRegistry.Register(model.ProviderConfig{
-		Name:      "test-mock",
-		Type:      model.ProviderTypeMock,
-		Priority:  1,
-		Enabled:   true,
-		Models:    []string{"gpt-4o-mini", "gpt-4", "test-model"},
-		Timeout:   30 * time.Second,
+		Name:       "test-mock",
+		Type:       model.ProviderTypeMock,
+		Priority:   1,
+		Enabled:    true,
+		Models:     []string{"gpt-4o-mini", "gpt-4", "test-model"},
+		Timeout:    30 * time.Second,
 		MaxRetries: 2,
 	}, mockProvider)
-	
+
 	mockRouter := chat.NewRouter(mockRegistry, logger)
 	mockFallbackChain := chat.NewFallbackChain(mockRouter, mockPricing, model.RouterConfig{}, logger)
-	
+
 	// Create mock tool executor for tests
 	mockToolExecutor := toolMock.NewMockExecutor(
 		toolMock.WithSupportedTools("echo_tool", "send_email", "query_db"),
-		toolMock.WithLatency(10 * time.Millisecond),
+		toolMock.WithLatency(10*time.Millisecond),
 	)
-	
+
 	mockChatUC := chat.NewChatUsecase(
 		mockFallbackChain,
 		mockPricing,
@@ -464,13 +474,13 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 		mockToolExecutor,
 		nil, // tool config (nil for tests)
 		chat.ChatUsecaseConfig{
-			DefaultTimeout: 30 * time.Second,
+			DefaultTimeout:     30 * time.Second,
 			EnableCostTracking: true,
-			MaxIterations: 5,
+			MaxIterations:      5,
 		},
 		logger,
 	)
-	
+
 	chatHandlers := handlers.NewChatHandlers(logger, mockChatUC)
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
 	reviewHandlers := handlers.NewReviewHandlers(hitlUC, reviewRepo, string(signingKey), logger)
@@ -506,29 +516,29 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 	delegationRepo := pgadapter.NewDelegationRepository(tc.DBPool)
 	delegationBudgetDec := redisadapter.NewRedisBudgetDecrementor(tc.RedisClient, logger)
 	delegationMW := middleware.NewDelegation(middleware.DelegationConfig{
-		Repository:   delegationRepo,
-		BudgetDec:    delegationBudgetDec,
-		MaxDepth:     5,
-		MaxFanOut:    10,
-		Logger:       logger,
-		FailOpen:     true,
+		Repository: delegationRepo,
+		BudgetDec:  delegationBudgetDec,
+		MaxDepth:   5,
+		MaxFanOut:  10,
+		Logger:     logger,
+		FailOpen:   true,
 	})
 
 	// Create router
 	router := api.NewRouter(api.RouterConfig{
-		Config:              &config.Config{RateLimit: config.RateLimitConfig{FailOpen: true}},
-		Logger:              logger,
-		AuthMW:              authMW,
-		TenantMW:            tenantMW,
-		DelegationMW:        delegationMW,
-		RateLimitMW:         rateLimitMW,
-		AuditMW:             auditMW,
-		GuardrailsMW:        middleware.NewGuardrails(middleware.GuardrailsConfig{Checker: &noopGuardrailChecker{}, Logger: logger}),
-		HITLMW:              middleware.NewHITL(middleware.HITLConfig{Logger: logger}),
-		AuthHandlers:        authHandlers,
-		ReviewHandlers:      reviewHandlers,
-		ChatHandlers:        chatHandlers,
-		AdminAuditHandlers:  adminAuditHandlers,
+		Config:             &config.Config{RateLimit: config.RateLimitConfig{FailOpen: true}},
+		Logger:             logger,
+		AuthMW:             authMW,
+		TenantMW:           tenantMW,
+		DelegationMW:       delegationMW,
+		RateLimitMW:        rateLimitMW,
+		AuditMW:            auditMW,
+		GuardrailsMW:       middleware.NewGuardrails(middleware.GuardrailsConfig{Checker: &noopGuardrailChecker{}, Logger: logger}),
+		HITLMW:             middleware.NewHITL(middleware.HITLConfig{Logger: logger}),
+		AuthHandlers:       authHandlers,
+		ReviewHandlers:     reviewHandlers,
+		ChatHandlers:       chatHandlers,
+		AdminAuditHandlers: adminAuditHandlers,
 	})
 
 	// Generate test token
