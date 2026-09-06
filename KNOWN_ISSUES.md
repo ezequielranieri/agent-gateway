@@ -17,6 +17,12 @@
   - Root cause: Lua script receives string instead of integer for large limits (>2^31)
   - Impact: Tests only. Production limits are within reasonable range.
 
+## Delegation Integration
+- **TestDelegationIntegration** / **TestDelegationMiddlewareValidation**: Requires Docker (testcontainers)
+  - Root cause: CI/CD or local environment may lack Docker socket access
+  - Impact: Integration tests for 3-hop delegation chain, chain revocation, and middleware validation cannot run without Docker
+  - Fix: Ensure Docker is available in the test environment; tests skip cleanly in `-short` mode
+
 ## Test Infrastructure
 - Global test timeout too aggressive (1s) for concurrent operations
 - Rate limiter Redis script doesn't handle large integers (>2^31)

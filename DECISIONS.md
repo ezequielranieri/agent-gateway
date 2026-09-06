@@ -262,6 +262,64 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 ---
 
+### AD-012 · Delegation Scope Intersection: Gateway-Computed, Never Widened — Status: Accepted
+
+**Rule**
+- The gateway MUST compute `effective_scope = parent_scope ∩ granted_scope` on every delegation hop.
+- Delegation MUST NEVER widen scope — the intersection is the only source of truth.
+- The agent MUST NOT compute its own effective scope; the gateway enforces it at the middleware layer.
+- If the intersection is empty, delegation is blocked with reason `scope_intersection_empty`.
+
+**Alternatives rejected**
+- *Agent-computed scope*: the agent could claim any scope, making the intersection check meaningless.
+- *Union of parent + granted*: widens scope by design — violates least-privilege delegation.
+- *Application-layer check only*: not structural; a buggy repository layer could bypass it.
+
+**Cost accepted**
+- Scope intersection requires parent scope in context at delegation time; non-delegated requests pass through without it.
+- Scope format is `[]string` with sorted unique elements — no wildcard or hierarchy matching.
+
+---
+
+### AD-013 · Delegation Grant Envelope: Opaque + JWT Transport — Status: Accepted
+
+**Rule**
+- Grant envelopes MUST carry: `grant_id`, `parent_grant_id` (nullable), `chain_id`, `tenant_id`, `delegate_identity`, `granted_scope` (`[]string`), `root_intent`, `hitl_classification`, `depth`, `generation`, `expires_at`, `budget_remaining`, `status`.
+- The grant is stored as a SHA-256 hash in the database (delegation_grants table) and transported as a self-contained JWT.
+- `root_intent` and `hitl_classification` are immutable from the root action — middleware evaluates HITL against root intent, never against a re-packaged current action.
+- Budget is a shared pool per chain (Redis atomic Lua), not per-agent — decremented at each hop.
+
+**Alternatives rejected**
+- *Per-agent budget*: each agent gets its own pool — simpler but wastes budget when agents share work.
+- *Signed grant only (no DB)*: no revocation mechanism, no lifecycle tracking.
+- *Plaintext storage*: database breach exposes full delegation context.
+
+**Cost accepted**
+- Grant envelope carries more fields than a minimal auth token — overhead accepted for auditability.
+- Budget pool is shared across the chain — one aggressive agent can exhaust the pool for siblings.
+
+---
+
+### AD-014 · Chain Revocation: Generation Counter — Status: Accepted
+
+**Rule**
+- Chain revocation MUST use a **generation counter** stored as `COUNT(*) of revoked grants` in the chain.
+- At each authorization boundary, the middleware compares `grant.Generation` against `currentChainGeneration`.
+- If `grant.Generation < currentChainGeneration`, the grant was issued before a revocation — reject as replay.
+- Revocation at `chain_id` takes effect at the NEXT authorization boundary, never mid-flight.
+- The generation counter is monotonically increasing — no new table needed, just a COUNT query.
+
+**Alternatives rejected**
+- *Tombstone list*: store every revoked grant ID — O(n) lookup, unbounded growth.
+- *Boolean revoked flag*: can't distinguish "revoked before this grant" from "revoked after" — silent replay window.
+- *Timestamp comparison*: clock skew across distributed systems makes this unreliable.
+
+**Cost accepted**
+- COUNT query on every request is O(n) in revoked grants — acceptable at portfolio scale.
+- Generation counter resets if all revoked grants are deleted — acceptable for single-instance posture.
+
+---
+
 ## 3. Code Conventions
 
 - **Domain is pure**: `internal/domain` imports nothing but the standard library — entities and sentinel errors, zero external dependencies.
@@ -298,6 +356,7 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 - [x] **Phase 6** — Tool sandbox: `ToolExecutor` interface + wazero WASM adapter
 - [x] **Phase 7** — External guardrail classifier adapter (OpenAI Moderation, Llama Guard)
 - [x] **Phase 8** — CI/CD pipeline + secret management + canary deploy + observability
+- [x] **Phase 9** — Secure agent delegation: scope intersection + grant envelope + chain revocation + middleware + unit/integration tests
 
 ---
 
