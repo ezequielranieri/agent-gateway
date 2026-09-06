@@ -4,7 +4,7 @@
 
 Multi-tenant Agent Gateway / Control Plane for LLM agents — the **only path** between your application and the model. Every call authenticated, authorized, rate-limited, audited, and guarded.
 
-> Status: **MVP complete** — Phases 0-8 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **External Guardrail Classifier**, **CI/CD + Observability**). **Pricing tables (migration 0014)** seeded with OpenAI, Anthropic, and Ollama model costs.
+> Status: **MVP complete** — Phases 0-9 implemented (Foundation, Rate Limiting, Audit Log, HITL, Guardrails, **Model Routing**, **Tool Sandbox**, **External Guardrail Classifier**, **CI/CD + Observability**, **Secure Agent Delegation**). **17 migrations** (0001_extensions through 0017_delegation_grants_generation). **Pricing tables (migration 0014)** seeded with OpenAI, Anthropic, and Ollama model costs.
 
 ## The problem
 
@@ -16,20 +16,21 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 
 `agent-gateway` answers those three with the simplest tools that provide the right guarantee:
 
-- **Zero-bypass architecture**: chi middleware chain — auth → tenant resolution → rate limit → audit → guardrails → model router. No endpoint reaches the model without passing the full chain.
+- **Zero-bypass architecture**: chi middleware chain — auth → tenant resolution → delegation → rate limit → audit → guardrails → HITL → model router. No endpoint reaches the model without passing the full chain.
 - **Tenant isolation enforced at the database**: Row Level Security (RLS) **FORCE** on every tenanted table, composite primary keys `(id, tenant_id)`, tenant context bound per transaction via `set_config(..., true)`. Two independent layers (DB + middleware), not one.
 - **Audit log that survives compromise**: Append-only PostgreSQL table with per-tenant hash chaining (`seq`, `prev_hash`, `chain_hash`), canonicalized JSON payloads, `VerifyChain` detector. Tampering leaves evidence.
 - **Human-in-the-Loop as a reusable service**: State machine in PostgreSQL + SSE streaming. Create approval request → human reviews via token → re-validate context → materialize. The same service for any write action across any agent.
 - **Guardrails as a domain interface**: `Guardrail` interface in `internal/domain/guardrail` — local implementation (regex, wordlist, PII patterns) ships by default; external classifier (Claude API, Llama Guard) plugs in as an adapter without touching domain logic.
 - **Model Routing with fallback & pricing**: `ModelProvider` port in `internal/domain/model` — OpenAI adapter (full), Anthropic/Ollama (stubbed), priority-based router, fallback chain with bounded retries + half-open circuit breaker, versioned pricing tables (provider+model → USD/1k tokens), pre-estimate/post-actual cost tracking integrated with rate-limit and audit.
 - **Tool Sandbox with WebAssembly isolation**: `ToolExecutor` port in `internal/domain/tool` — `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS mounts, no network by default, per-execution module instantiation; `MockExecutor` for tests; bounded agent loop (max 5 iterations) with HITL gate, per-step cost/audit/rate-limit accounting.
+- **Secure Agent Delegation**: parent→child agent delegation where the **effective scope is `parent ∩ granted`** — computed gateway-side, never widened. Fail-closed middleware (`FailOpen: false`) positioned after tenant resolution and before rate limiting (MaxDepth 5 / MaxFanOut 10 per hop); grant lifecycle `issued → active → revoked/expired/consumed`; chain revocation via a **generation counter** (each revoked grant bumps the chain generation); per-chain budget enforced by an **atomic Redis Lua decrement** with a fail-fast panic guard (nil deps = no middleware, no silent bypass); opaque grant envelope (AD-013) persisted in `delegation_grants` (tenanted, RLS FORCE, composite PK) with full lifecycle tracking (JWT transport is AD-013 design, not yet wired to production callers).
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         HTTP Layer (chi)                            │
-│  router.go · middleware.go (auth, tenant, ratelimit, audit, hitl)   │
+│  middleware.go (auth, tenant, delegation, ratelimit, audit, hitl)   │
 └───────────────────────────▲───────────────────────────▲─────────────┘
                              │                           │
            ports.AuthService  │                    ports.Guardrail
@@ -49,6 +50,7 @@ Any system running LLM agents at scale eventually faces three uncomfortable ques
 │                    Infrastructure Layer (Adapters)                 │
 │  postgres/  (pgx, sqlc, RLS tenant sessions, audit chain)          │
 │  redis/     (go-redis + redis_rate token bucket)                   │
+│  delegation/ (grants — postgres · budget — redis Lua, AD-013)      │
 │  jwt/       (golang-jwt/v5 HS256, multi-key rotation via kid)      │
 │  otel/      (OpenTelemetry stdout exporter + Prometheus /metrics)  │
 │  guardrail/ (LocalGuardrail — regex/wordlist/PII patterns)         │
@@ -71,10 +73,11 @@ internal/
 ├── domain/           entities: Tenant, User, Role, Quota, AuditEvent, ReviewRequest, GuardrailViolation
 │   └── model/        ModelProvider port, ChatRequest/Response, RouterConfig, PricingService, CircuitBreaker
 │   └── tool/         ToolExecutor port, ToolCall/ToolResult, ToolConfig, sentinel errors
+│   └── delegation/   Grant envelope, ScopeSet (∩), lifecycle + validators, sentinel errors
 ├── usecase/          application services (gateways, ratelimit, audit, hitl, guardrail, chat)
-├── adapter/          postgres, redis, jwt, otel, guardrail, hitl, provider, pricing, tool
+├── adapter/          postgres (incl. delegation_repository.go), redis (incl. delegation_budget.go), jwt, otel, guardrail, hitl, provider, pricing, tool
 ├── api/              OpenAPI 3.1 handlers (oapi-codegen generated)
-└── middleware/       chi middlewares: auth, tenant, ratelimit, audit, hitl
+└── middleware/       chi middlewares: auth, tenant, delegation, ratelimit, audit, hitl
 migrations/           SQL schema + RLS policies + seed
 docker-compose.yml    postgres:16 + redis:7 + migrate
 Makefile · .env.example · sqlc.yaml · goose.yaml
@@ -112,6 +115,7 @@ ALTER TABLE private.audit_events FORCE ROW LEVEL SECURITY;
 | Rate limiting | Redis + `redis_rate` (token bucket), 3 dimensions: requests/min, tokens/min, tool_execs/min — per tenant, user, role |
 | Guardrails | Domain interface `Guardrail` + `LocalGuardrail` (regex, wordlist, PII, injection patterns); `CompositeGuardrail` with external classifiers (OpenAI Moderation, Anthropic, Llama Guard) — merge logic: any/all/weighted, fail behaviors: fallback_local/fail_open/fail_closed |
 | HITL | State machine in PG (`PENDING` → `APPROVED`/`REJECTED`/`EXPIRED`), opaque token (SHA-256 stored), SSE streaming, full re-validation on approve |
+| Agent delegation | Effective scope computed gateway-side as `parent ∩ granted` — never widened; fail-closed middleware (`FailOpen: false`) between tenant resolution and rate limiting; chain revocation via generation counter (count of revoked grants per chain); per-chain budget via atomic Redis Lua decrement; opaque grant envelope persisted under RLS FORCE with lifecycle tracking (JWT transport per AD-013, not yet wired) |
 
 ## Quickstart
 
@@ -123,7 +127,7 @@ make docker-up
 make migrate-up
 ```
 
-14 migrations will run (0001_extensions through 0014_pricing_tables).
+17 migrations will run (0001_extensions through 0017_delegation_grants_generation).
 
 ```bash
 # 2. configure the app
@@ -187,14 +191,15 @@ make test
 make lint
 ```
 
-Integration tests run against **real** PostgreSQL and Redis via testcontainers-go — no mocks in the persistence, rate-limiting, or audit layers. Every repository, every migration (including RLS policies), and the rate limiter's atomicity are tested against real infrastructure.
+Integration tests run against **real** PostgreSQL and Redis via testcontainers-go — no mocks in the persistence, rate-limiting, or audit layers. Every repository, every migration (including RLS policies), and the rate limiter's atomicity are tested against real infrastructure. The delegation suite (3-hop chain, chain revocation, middleware validation) also runs in CI on every push against real Postgres 16 + Redis 7 (GitHub service containers + testcontainers).
 
 ## Verified Guarantees
 
-Two of the system's more important correctness claims are measured, not asserted:
+Three of the system's more important correctness claims are measured, not asserted:
 
 - **Tenant isolation holds at the database level.** Verified by integration tests that assert: (a) with no tenant context, a raw `SELECT * FROM private.audit_events` returns zero rows; (b) inside a tenant-bound transaction the same table returns exactly that tenant's rows; (c) a cross-tenant INSERT is rejected by `WITH CHECK` policy.
 - **Rate limiter is atomic under real concurrency.** Verified by firing 50 concurrent goroutines at the same rate limit key with a limit of 3, and asserting exactly 3 succeed and 47 are rejected — not "approximately," exactly.
+- **Delegation scope is intersected gateway-side, never widened.** Verified by integration tests asserting: (a) a grant whose scope does not intersect the parent scope is rejected (403) at the middleware boundary; (b) a pre-revocation grant (generation 0) is rejected once its chain generation has advanced (root+mid+leaf revoked = generation 3).
 
 ## What's Deliberately Not Implemented (Yet)
 
@@ -211,7 +216,7 @@ Same principle as `go-authz` and `agro-iam`: named explicitly, not silently abse
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `.github/workflows/ci.yml` | Push to master, PR | Lint, test, build, secret scan, vulnerability scan |
+| `.github/workflows/ci.yml` | Push to master, PR | Unit tests (`./internal/...`) + delegation integration tests against real Postgres 16 + Redis 7 (`-run 'Delegation' ./test/integration/`), build & push (master only), secret scan (gitleaks). Lint + vulnerability scan (Trivy) run locally (`make lint`; see Makefile) |
 | `.github/workflows/cd-staging.yml` | Push to master | Deploy to staging (auto) |
 | `.github/workflows/release.yml` | Tag push (v*) | Build release, sign images, deploy to production |
 
@@ -305,6 +310,7 @@ curl https://api.agent-gateway.com/health
 - [x] **Phase 6** — Tool sandbox: `ToolExecutor` interface + `WasmExecutor` (wazero) with fuel/memory/wall-time limits, read-only FS mounts, no network by default, per-execution instantiation, bounded agent loop (max 5), HITL gate, per-step cost/audit/rate-limit
 - [x] **Phase 7** — External guardrail classifier adapter (OpenAI Moderation, Anthropic, Llama Guard) with composite merge logic (any/all/weighted), fail behaviors (fallback_local/fail_open/fail_closed), HTTP client with retry + circuit breaker
 - [x] **Phase 8** — CI/CD pipeline (GitHub Actions), secret management (SOPS + GitHub Secrets), canary deploy, observability stack (Prometheus/Grafana/Alertmanager/Loki/Jaeger)
+- [x] **Phase 9** — Secure agent delegation: parent→child grants with gateway-computed scope intersection (`parent ∩ granted`), fail-closed middleware (FailOpen: false, MaxDepth 5, MaxFanOut 10), chain revocation via generation counter, atomic Redis budget enforcement, opaque grant envelope (AD-013); unit + integration tests (3-hop chain) wired into CI
 
 ## License
 

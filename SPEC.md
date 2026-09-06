@@ -2,6 +2,7 @@
 
 **Estado:** Cerrada — fuente de verdad funcional del proyecto
 **Fecha:** 2026-08-22
+**Actualización:** 2026-09-06 — Fase 9 (delegación segura de agentes) cerrada e implementada. Decisiones de diseño en AD-012/AD-013/AD-014 (DECISIONS.md).
 
 ## Propósito
 
@@ -12,7 +13,7 @@ Gateway / Control Plane multi-tenant para agentes LLM — la **única capa inter
 El sistema separa explícitamente dos planos, siguiendo el patrón de sistemas multi-tenant serios:
 
 - **Plano de control (plataforma):** Super Admin, gestión de tenants, cuotas globales.
-- **Plano de datos (tenant):** Users, Roles, Permissions, Quotas, AuditEvents, ReviewRequests, GuardrailViolations — todo scopeado a un tenant específico.
+- **Plano de datos (tenant):** Users, Roles, Permissions, Quotas, AuditEvents, ReviewRequests, GuardrailViolations, DelegationGrants — todo scopeado a un tenant específico.
 
 Estos planos no se mezclan: un Super Admin no es un "admin de tenant" con privilegios extendidos, es una entidad separada, global, sin `tenant_id`.
 
@@ -29,6 +30,7 @@ Estos planos no se mezclan: un Super Admin no es un "admin de tenant" con privil
 | **AuditEvent** | Evento de auditoría inmutable | hash-chained per tenant, severity (info/warn/critical) |
 | **ReviewRequest** | Solicitud HITL | state machine: PENDING → APPROVED/REJECTED/EXPIRED |
 | **GuardrailViolation** | Violación de guardrail | input/output, severity, regla que disparó |
+| **DelegationGrant** | Grant de delegación agente→agente | binding parent/child (chain_id, parent_grant_id), scope = intersección `parent ∩ granted` (gateway-computed, nunca se amplía), lifecycle `issued → active → revoked/expired/consumed`, generation counter (revocación de cadena), tenant-scoped + RLS FORCE + PK compuesta `(id, tenant_id)` |
 
 ## Flujo de provisioning (decisión cerrada)
 
@@ -54,7 +56,7 @@ Primer usuario   → se le asigna explícitamente el rol "admin" del tenant al c
 8. **Listar sesiones activas** de un usuario (basado en metadata de `RefreshToken`).
 
 ### Gateway Core
-9. **Endpoint `/v1/chat/completions`**: única entrada para llamadas a LLM — auth → tenant → ratelimit → audit → guardrails → model router.
+9. **Endpoint `/v1/chat/completions`**: única entrada para llamadas a LLM — auth → tenant → delegación → ratelimit → audit → guardrails → HITL → model router.
 10. **Rate limiting** en 3 dimensiones: requests/min, tokens/min, tool_execs/min — por tenant, user, role (precedencia configurable).
 11. **Audit log** completo e inmutable: llamadas al modelo, ejecución de tools, decisiones de HITL, violaciones de guardrail — hash-chained per tenant.
 12. **Guardrails input/output**: validación antes y después de la llamada al modelo — interfaz `Guardrail` + `LocalGuardrail` (regex/wordlist/PII/injection) por defecto.
@@ -69,6 +71,11 @@ Primer usuario   → se le asigna explícitamente el rol "admin" del tenant al c
 17. **Consulta de audit log** con filtros (tenant, actor, acción, entidad, rango temporal, severidad).
 18. **Verificación de cadena de hash** (`VerifyChain`) — detector de manipulación interno.
 19. **Health/Readiness**: `/health` (liveness), `/ready` (DB + Redis connectivity).
+
+### Delegación de agentes (Fase 9)
+20. **Crear grant de delegación**: un agente padre emite un grant para un agente hijo (scope acotado, TTL, budget heredado del pool de la cadena) — persistido en `delegation_grants` (RLS FORCE, PK compuesta, ADR-002).
+21. **Consumir/delegar con intersección de scope**: el middleware computa `effective_scope = parent ∩ granted` en cada hop — nunca se amplía; fail-closed (`FailOpen: false`), límites MaxDepth 5 / MaxFanOut 10, detección de ciclos y guarda cross-tenant.
+22. **Revocación de cadena por generation counter**: revocar la cadena incrementa la generación (COUNT de grants revocados); grants emitidos en una generación anterior son rechazados en la siguiente autorización (AD-014).
 
 ## Modelo de permisos
 
@@ -85,10 +92,10 @@ Primer usuario   → se le asigna explícitamente el rol "admin" del tenant al c
 | SSO (SAML, Google/Microsoft login) | Mismo criterio que MFA |
 | Service Accounts / M2M (client_credentials) | Anotado como deuda: probable necesidad futura cuando otros servicios necesiten autenticarse como "máquina" y no como usuario humano |
 | UI de administración | No forma parte del MVP (servicio expone solo API) |
-| Model routing / fallback (GPT-4o → Claude → Llama local) | Requiere provider port + pricing abstraction primero — Fase 5 |
-| Pricing / cost abstraction (model + tokens → USD) | Precios cambian por provider; necesita config versionado — Fase 5 |
-| Tool sandbox (WASM via wazero / gVisor) | Aislamiento de ejecución es boundary separado — Fase 6 |
-| Clasificador externo de guardrails (Claude API / Llama Guard) | Agrega dependencia de red, latencia, costo, API keys — Fase 7 |
+| Model routing / fallback (GPT-4o → Claude → Llama local) | Implementado en Fase 5 (provider port + pricing abstraction) |
+| Pricing / cost abstraction (model + tokens → USD) | Implementado en Fase 5 (tablas versionadas, migración 0014) |
+| Tool sandbox (WASM via wazero / gVisor) | Implementado en Fase 6 (WasmExecutor — wazero) |
+| Clasificador externo de guardrails (Claude API / Llama Guard) | Implementado en Fase 7 (ExternalClassifier) |
 | Schema-per-tenant isolation | RLS en instancia compartida basta para threat model actual |
 | Auditoría avanzada / event sourcing completo | Se evalúa si aparece requisito de compliance o trazabilidad extendida |
 
@@ -100,6 +107,6 @@ Definidos íntegramente por el stack tecnológico cerrado en `STACK.md` (fuente 
 
 1. **Redis SPOF** — instancia única en MVP. Criterio de salida: migrar a Sentinel/Cluster antes de producción real.
 2. **Multi-tenancy isolation** — actualmente `tenant_id` + RLS FORCE + PK compuesta. Criterio de salida: evaluar schema-per-tenant solo si aparece requisito real de aislamiento fuerte.
-3. **Tool Sandbox** — no implementado. Criterio: interfaz `ToolExecutor` + `WasmExecutor` (wazero) implementados.
-4. **Model Routing / Fallback** — no implementado. Criterio: provider port + `PricingService` implementados.
-5. **External Guardrail Classifier** — no implementado. Criterio: adapter `ExternalClassifier` implementado.
+3. **Tool Sandbox** — ~~no implementado~~ **resuelto en Fase 6**: interfaz `ToolExecutor` + `WasmExecutor` (wazero) implementados.
+4. **Model Routing / Fallback** — ~~no implementado~~ **resuelto en Fase 5**: provider port + `PricingService` implementados.
+5. **External Guardrail Classifier** — ~~no implementado~~ **resuelto en Fase 7**: adapter `ExternalClassifier` implementado.

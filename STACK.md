@@ -15,7 +15,7 @@
 
 | Capa | Tecnología | Notas |
 |---|---|---|
-| Base de datos | PostgreSQL 16 | Fuente de verdad (ACID) + Row Level Security FORCE como defensa en profundidad. Multi-tenancy vía tenant_id + PK compuesta. **Tablas pricing (migración 0014)** con versionado de precios por proveedor/modelo |
+| Base de datos | PostgreSQL 16 | Fuente de verdad (ACID) + Row Level Security FORCE como defensa en profundidad. Multi-tenancy vía tenant_id + PK compuesta. **Migraciones hasta 0017**: tablas pricing (0014, versionado de precios por proveedor/modelo) y delegación de agentes (0015 grants, 0016 columnas de cadena en audit_events, 0017 generation counter) — mismo patrón RLS FORCE + PK compuesta (ADR-002) |
 | Queries | sqlc + pgx | Complementarios: sqlc genera código type-safe sobre pgx |
 | Migraciones | goose | Obligatorio — sqlc no gestiona schema |
 | Caché / Rate Limit | Redis 7 + redis_rate | Token bucket (requests, tokens, tool_execs) |
@@ -29,6 +29,7 @@
 | Password Hashing | Argon2id (m=65536, t=1, p=4, 32-byte key, PHC format) |
 | Key Management | Múltiples claves activas (kid) + rotación |
 | Rate Limiting | Redis + redis_rate (token bucket), 3 dimensiones: requests, tokens, tool_execs por tenant/user/role |
+| Delegación de agentes | Middleware fail-closed (`FailOpen: false`) entre tenant y rate limit; scope efectivo = intersección `parent ∩ granted` computada por el gateway (nunca se amplía, AD-012); revocación de cadena por generation counter (COUNT de grants revocados, AD-014); presupuesto por cadena en Redis (decremento atómico Lua; deps nil → panic, sin bypass silencioso); envelope opaco persistido en `delegation_grants`; transporte JWT per AD-013, aún no cableado a callers de producción |
 | Propagación de identidad | JWT interno de corta duración firmado (nunca headers planos) |
 
 ## Observabilidad
@@ -49,7 +50,7 @@
 | Tipo | Herramienta |
 |---|---|
 | Unit | testify + table-driven + mocks en puertos (sin DB) |
-| Integración | testcontainers-go (PostgreSQL + Redis reales en CI, no mocks) |
+| Integración | testcontainers-go (PostgreSQL + Redis reales, no mocks). Delegación (cadena 3-hops, revocación, validación de middleware) corre en CI contra Postgres 16 + Redis 7 reales; las suites de audit/guardrail/HITL/ratelimit aún no están cableadas a CI (deuda deliberada — ver KNOWN_ISSUES.md) |
 
 ## Contrato de API
 
@@ -60,7 +61,7 @@ OpenAPI 3.1, definido desde el día 1. Handlers generados con `oapi-codegen`.
 | Capa | Tecnología |
 |---|---|
 | Local / Demo | Docker Compose (Postgres 16 + Redis 7 + Gateway) |
-| CI | GitHub Actions (test, build, secret scan gitleaks, vulnerability scan Trivy) |
+| CI | GitHub Actions (unit tests + integración de delegación, build & push, secret scan gitleaks; lint + Trivy se corren localmente — ver Makefile) |
 | Secretos | Variables de entorno + .env.example — nada hardcodeado |
 | Registry | GHCR (ghcr.io) — build & push en push a master |
 

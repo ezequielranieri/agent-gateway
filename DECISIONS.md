@@ -281,21 +281,23 @@ Status legend: `Accepted` = settled; `Open` = proposal, do not implement.
 
 ---
 
-### AD-013 · Delegation Grant Envelope: Opaque + JWT Transport — Status: Accepted
+### AD-013 · Delegation Grant Envelope: Opaque, Persisted in Full under RLS — Status: Accepted
 
 **Rule**
 - Grant envelopes MUST carry: `grant_id`, `parent_grant_id` (nullable), `chain_id`, `tenant_id`, `delegate_identity`, `granted_scope` (`[]string`), `root_intent`, `hitl_classification`, `depth`, `generation`, `expires_at`, `budget_remaining`, `status`.
-- The grant is stored as a SHA-256 hash in the database (delegation_grants table) and transported as a self-contained JWT.
+- The grant envelope is persisted **in full in typed columns** of `delegation_grants` (tenanted, RLS FORCE, composite PK `(id, tenant_id)`). There is no hash-only column: the storage is the envelope fields themselves (`granted_scope jsonb`, `root_intent`, `hitl_classification`, `depth`, `generation`, `expires_at`, `budget_remaining`, `status`).
+- JWT transport (self-contained signed envelope carrying the grant) is the intended carrier per this ADR's original design but is **not yet wired to production** — there is no grant issuance endpoint and `SetGrantInContext` has no callers; middleware reads the grant from the repository-bound context.
 - `root_intent` and `hitl_classification` are immutable from the root action — middleware evaluates HITL against root intent, never against a re-packaged current action.
 - Budget is a shared pool per chain (Redis atomic Lua), not per-agent — decremented at each hop.
 
 **Alternatives rejected**
 - *Per-agent budget*: each agent gets its own pool — simpler but wastes budget when agents share work.
 - *Signed grant only (no DB)*: no revocation mechanism, no lifecycle tracking.
-- *Plaintext storage*: database breach exposes full delegation context.
+- *Hash-opaque storage*: storing only a blind token would force a second lookup and cannot drive scope-intersection evaluation; the implementation stores the envelope fields under forced RLS instead.
 
 **Cost accepted**
 - Grant envelope carries more fields than a minimal auth token — overhead accepted for auditability.
+- Grant fields are stored in clear-text columns inside the tenanted table — protection relies on RLS FORCE at the DB layer; JWT transport (signed opaque carrier) is the planned hardening for cross-service delegation.
 - Budget pool is shared across the chain — one aggressive agent can exhaust the pool for siblings.
 
 ---
