@@ -155,7 +155,7 @@ func testThreeHopChain(
 		DelegateIdentity:   "mid-agent",
 		GrantedScope:       delegation.NewScopeSet([]string{"read:data"}),
 		RootIntent:         "delete:records", // must match root
-		HITLClassification: "required",      // must not relax
+		HITLClassification: "required",       // must not relax
 		Depth:              1,
 		Generation:         0,
 		ExpiresAt:          now.Add(1 * time.Hour),
@@ -174,7 +174,7 @@ func testThreeHopChain(
 		DelegateIdentity:   "leaf-agent",
 		GrantedScope:       delegation.NewScopeSet([]string{"read:data"}),
 		RootIntent:         "delete:records", // must match root
-		HITLClassification: "required",      // must not relax
+		HITLClassification: "required",       // must not relax
 		Depth:              2,
 		Generation:         0,
 		ExpiresAt:          now.Add(1 * time.Hour),
@@ -292,10 +292,10 @@ func testChainRevocationKillsTree(
 	err = repo.RevokeByChain(ctx, tenantID, chainID)
 	require.NoError(t, err, "Chain revocation must succeed")
 
-	// Verify generation bumped (1 revoked grant = generation 1)
+	// Verify generation bumped (3 revoked grants = generation 3)
 	gen, err = repo.GetChainGeneration(ctx, tenantID, chainID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, gen, "Chain generation must be 1 after revocation")
+	assert.Equal(t, 3, gen, "Chain generation must count all revoked grants (root+mid+leaf)")
 
 	// Verify all grants in chain are now revoked
 	grants, err := repo.ListByChain(ctx, tenantID, chainID)
@@ -307,7 +307,7 @@ func testChainRevocationKillsTree(
 	}
 
 	// Verify old-generation grants are rejected by ValidateChainRevocation
-	err = delegation.ValidateChainRevocation(0, 1) // generation 0 < current 1
+	err = delegation.ValidateChainRevocation(0, gen) // generation 0 < current 3
 	require.ErrorIs(t, err, delegation.ErrGrantRevokedOrConsumed,
 		"Old-generation grant must be rejected after chain revocation")
 }
@@ -333,11 +333,11 @@ func TestDelegationMiddlewareValidation(t *testing.T) {
 	budgetDec := redisadapter.NewRedisBudgetDecrementor(tc.RedisClient, logger)
 
 	cfg := middleware.DelegationConfig{
-		Repository:   delegationRepo,
-		BudgetDec:    budgetDec,
-		MaxDepth:     3,
-		MaxFanOut:    2,
-		Logger:       logger,
+		Repository: delegationRepo,
+		BudgetDec:  budgetDec,
+		MaxDepth:   3,
+		MaxFanOut:  2,
+		Logger:     logger,
 	}
 	mw := middleware.NewDelegation(cfg)
 
@@ -367,15 +367,16 @@ func TestDelegationMiddlewareValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		grant := &delegation.Grant{
-			GrantID:          domain.NewUUID(),
-			ChainID:          domain.NewUUID(),
-			TenantID:         tenantID2,
-			DelegateIdentity: "scope-agent",
-			GrantedScope:     delegation.NewScopeSet([]string{"write:data"}),
-			Depth:            1,
-			ExpiresAt:        time.Now().Add(1 * time.Hour),
-			BudgetRemaining:  100,
-			Status:           delegation.GrantStatusActive,
+			GrantID:            domain.NewUUID(),
+			ChainID:            domain.NewUUID(),
+			TenantID:           tenantID2,
+			DelegateIdentity:   "scope-agent",
+			GrantedScope:       delegation.NewScopeSet([]string{"write:data"}),
+			HITLClassification: "none",
+			Depth:              1,
+			ExpiresAt:          time.Now().Add(1 * time.Hour),
+			BudgetRemaining:    100,
+			Status:             delegation.GrantStatusActive,
 		}
 		require.NoError(t, delegationRepo.Create(tc.Ctx, grant))
 
@@ -393,15 +394,16 @@ func TestDelegationMiddlewareValidation(t *testing.T) {
 	// --- Subtest: TTL expiration blocks ---
 	t.Run("TTLExpirationBlocks", func(t *testing.T) {
 		grant := &delegation.Grant{
-			GrantID:          domain.NewUUID(),
-			ChainID:          domain.NewUUID(),
-			TenantID:         tenantID,
-			DelegateIdentity: "ttl-agent",
-			GrantedScope:     delegation.NewScopeSet([]string{"read:data"}),
-			Depth:            1,
-			ExpiresAt:        time.Now().Add(-1 * time.Hour), // already expired
-			BudgetRemaining:  100,
-			Status:           delegation.GrantStatusActive,
+			GrantID:            domain.NewUUID(),
+			ChainID:            domain.NewUUID(),
+			TenantID:           tenantID,
+			DelegateIdentity:   "ttl-agent",
+			GrantedScope:       delegation.NewScopeSet([]string{"read:data"}),
+			HITLClassification: "none",
+			Depth:              1,
+			ExpiresAt:          time.Now().Add(-1 * time.Hour), // already expired
+			BudgetRemaining:    100,
+			Status:             delegation.GrantStatusActive,
 		}
 		require.NoError(t, delegationRepo.Create(tc.Ctx, grant))
 
@@ -420,16 +422,17 @@ func TestDelegationMiddlewareValidation(t *testing.T) {
 
 		// Create a grant at generation 0
 		grant := &delegation.Grant{
-			GrantID:          domain.NewUUID(),
-			ChainID:          chainID,
-			TenantID:         tenantID,
-			DelegateIdentity: "gen-agent",
-			GrantedScope:     delegation.NewScopeSet([]string{"read:data"}),
-			Depth:            1,
-			Generation:       0,
-			ExpiresAt:        time.Now().Add(1 * time.Hour),
-			BudgetRemaining:  100,
-			Status:           delegation.GrantStatusActive,
+			GrantID:            domain.NewUUID(),
+			ChainID:            chainID,
+			TenantID:           tenantID,
+			DelegateIdentity:   "gen-agent",
+			GrantedScope:       delegation.NewScopeSet([]string{"read:data"}),
+			HITLClassification: "none",
+			Depth:              1,
+			Generation:         0,
+			ExpiresAt:          time.Now().Add(1 * time.Hour),
+			BudgetRemaining:    100,
+			Status:             delegation.GrantStatusActive,
 		}
 		require.NoError(t, delegationRepo.Create(tc.Ctx, grant))
 
