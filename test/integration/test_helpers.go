@@ -473,6 +473,7 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 		mockRouter,
 		mockToolExecutor,
 		nil, // tool config (nil for tests)
+		nil, // tool repo (nil for tests)
 		chat.ChatUsecaseConfig{
 			DefaultTimeout:     30 * time.Second,
 			EnableCostTracking: true,
@@ -481,7 +482,7 @@ func CreateTestRouter(t *testing.T, tc *TestContainer, logger zerolog.Logger) (*
 		logger,
 	)
 
-	chatHandlers := handlers.NewChatHandlers(logger, mockChatUC)
+	chatHandlers := handlers.NewChatHandlers(logger, mockChatUC, nil)
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
 	reviewHandlers := handlers.NewReviewHandlers(hitlUC, reviewRepo, string(signingKey), logger)
 

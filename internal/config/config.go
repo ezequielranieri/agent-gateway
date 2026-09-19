@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -240,6 +241,11 @@ func Load(configPath string) (*Config, error) {
 		k.Set(configKey, val)
 	}
 
+	// Validate old tool fuel env vars are not used
+	if err := validateOldToolFuelEnvVars(); err != nil {
+		return nil, err
+	}
+
 	// Load from command line flags (for overriding specific values)
 	// This allows runtime overrides like: -database.dsn=...
 	fs := pflag.NewFlagSet("config", pflag.ContinueOnError)
@@ -256,6 +262,28 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// validateOldToolFuelEnvVars checks for deprecated TOOL_DEFAULT_FUEL and TOOL_MAX_FUEL env vars
+// These were replaced by execution_timeout_ms in migration 0019
+func validateOldToolFuelEnvVars() error {
+	oldVars := []string{
+		"TOOL_DEFAULT_FUEL",
+		"TOOL_MAX_FUEL",
+	}
+	
+	var found []string
+	for _, v := range oldVars {
+		if os.Getenv(v) != "" {
+			found = append(found, v)
+		}
+	}
+	
+	if len(found) > 0 {
+		return fmt.Errorf("deprecated environment variables detected: %s. These were replaced by execution_timeout_ms in migration 0019. Please use TOOL_DEFAULT_TIMEOUT_MS and TOOL_MAX_TIMEOUT_MS instead", strings.Join(found, ", "))
+	}
+	
+	return nil
 }
 
 // MustLoad loads configuration and panics on error

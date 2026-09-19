@@ -78,6 +78,9 @@ func main() {
 	roleRepo := postgres.NewRoleRepository(dbPool)
 	delegationRepo := postgres.NewDelegationRepository(dbPool)
 
+	// Initialize tool repository with audit emission and caching
+	toolRepo := postgres.NewToolRepository(dbPool, auditRepo, logger, cfg.Tool.CacheTTL, cfg.Tool.CacheMaxEntries)
+
 	// Initialize JWT adapter
 	// Generate a random signing key if not provided
 	signingKey := []byte(cfg.JWT.Secret)
@@ -126,6 +129,9 @@ func main() {
 	// Initialize admin audit handlers
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
 
+	// Initialize admin tools handlers
+	adminToolsHandler := handlers.NewAdminToolsHandler(toolRepo, logger)
+
 	// Initialize review handlers
 	reviewHandlers := handlers.NewReviewHandlers(hitlUC, reviewRepo, string(signingKey), logger)
 
@@ -147,6 +153,7 @@ func main() {
 		cfg.Router,
 		&cfg.Tool,
 		toolExecutor,
+		toolRepo,
 		pricingService,
 		logger,
 	)
@@ -155,7 +162,7 @@ func main() {
 	}
 
 	// Initialize chat handlers
-	chatHandlers := handlers.NewChatHandlers(logger, chatUC)
+	chatHandlers := handlers.NewChatHandlers(logger, chatUC, toolRepo)
 
 	// Initialize middleware with real JWT service
 	authMW := middleware.NewAuth(middleware.AuthConfig{
@@ -268,6 +275,7 @@ func main() {
 		ReviewHandlers:         reviewHandlers,
 		ChatHandlers:           chatHandlers,
 		AdminAuditHandlers:     adminAuditHandlers,
+		AdminToolsHandler:      adminToolsHandler,
 		AdminTenantsHandler:    adminTenantsHandler,
 		AdminUsersHandler:      adminUsersHandler,
 		AdminRolesHandler:      adminRolesHandler,

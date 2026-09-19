@@ -1,29 +1,34 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/tool/wazero"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
+	"github.com/ezequielranieri/agent-gateway/internal/domain/tool"
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/chat"
 )
 
 // ChatHandlers holds the chat completion handlers
 type ChatHandlers struct {
-	logger    zerolog.Logger
-	usecase   *chat.ChatUsecase
+	logger     zerolog.Logger
+	usecase    *chat.ChatUsecase
+	toolRepo   tool.ToolRepository
 }
 
-// NewChatHandlers creates new chat handlers with the chat usecase
-func NewChatHandlers(logger zerolog.Logger, usecase *chat.ChatUsecase) *ChatHandlers {
+// NewChatHandlers creates new chat handlers with the chat usecase and tool repository
+func NewChatHandlers(logger zerolog.Logger, usecase *chat.ChatUsecase, toolRepo tool.ToolRepository) *ChatHandlers {
 	return &ChatHandlers{
-		logger:  logger.With().Str("handler", "chat").Logger(),
-		usecase: usecase,
+		logger:   logger.With().Str("handler", "chat").Logger(),
+		usecase:  usecase,
+		toolRepo: toolRepo,
 	}
 }
 
@@ -83,6 +88,17 @@ type ChatCompletionUsage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// ValidatedTool represents a tool definition validated against the registry
+type ValidatedTool struct {
+	Name         string
+	Description  string
+	InputSchema  json.RawMessage
+	Grants       json.RawMessage
+	FuelLimit    uint64
+	MemoryPages  uint32
+	Hash         string
+}
+
 // ChatCompletions handles POST /v1/chat/completions
 func (h *ChatHandlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	logger := h.logger.With().Str("method", "ChatCompletions").Logger()
@@ -108,7 +124,12 @@ func (h *ChatHandlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get tenant and user from context for rate limit cost tracking
-	tenantID, _ := middleware.GetTenantID(r)
+	tenantID, ok := middleware.GetTenantID(r)
+	if !ok {
+		logger.Debug().Msg("Missing tenant_id in context")
+		h.writeError(w, r, http.StatusUnauthorized, domain.ErrUnauthorized)
+		return
+	}
 	userID, _ := middleware.GetUserID(r)
 
 	logger.Debug().
@@ -118,8 +139,13 @@ func (h *ChatHandlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Str("user_id", userID.String()).
 		Msg("Chat completion request")
 
-	// Convert handler request to usecase request
-	usecaseReq := h.convertToUsecaseRequest(req, tenantID.String(), userID.String())
+	// Convert handler request to usecase request with tool validation
+	usecaseReq, err := h.convertToUsecaseRequest(r.Context(), req, tenantID, userID)
+	if err != nil {
+		logger.Error().Err(err).Msg("Tool validation failed")
+		h.writeError(w, r, h.mapError(err), err)
+		return
+	}
 
 	// Execute chat completion via usecase
 	ctx := r.Context()
@@ -136,11 +162,13 @@ func (h *ChatHandlers) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, handlerResp)
 }
 
-// convertToUsecaseRequest converts handler request to usecase request
+// convertToUsecaseRequest converts handler request to usecase request with tool validation
 func (h *ChatHandlers) convertToUsecaseRequest(
+	ctx context.Context,
 	req ChatCompletionRequest,
-	tenantID, userID string,
-) chat.ChatRequest {
+	tenantID domain.UUID,
+	userID domain.UUID,
+) (chat.ChatRequest, error) {
 	messages := make([]model.Message, len(req.Messages))
 	for i, msg := range req.Messages {
 		messages[i] = model.Message{
@@ -159,16 +187,84 @@ func (h *ChatHandlers) convertToUsecaseRequest(
 		}
 	}
 
-	return chat.ChatRequest{
-		Model:       req.Model,
-		Messages:    messages,
-		Temperature: req.Temperature,
-		MaxTokens:   req.MaxTokens,
-		Stream:      req.Stream != nil && *req.Stream,
-		Tools:       tools,
-		ToolChoice:  req.ToolChoice,
-		User:        userID,
+	// Validate tools against registry if any tools provided
+	var validatedTools []wazero.ValidatedTool
+	if len(tools) > 0 && h.toolRepo != nil {
+		validated, err := h.validateTools(ctx, tenantID, tools)
+		if err != nil {
+			return chat.ChatRequest{}, err
+		}
+		validatedTools = validated
 	}
+
+	return chat.ChatRequest{
+		Model:           req.Model,
+		Messages:        messages,
+		Temperature:     req.Temperature,
+		MaxTokens:       req.MaxTokens,
+		Stream:          req.Stream != nil && *req.Stream,
+		Tools:           tools,
+		ValidatedTools:  validatedTools,
+		ToolChoice:      req.ToolChoice,
+		User:            userID.String(),
+		TenantID:        tenantID,
+	}, nil
+}
+
+// validateTools validates each tool in the request against the registry
+// Returns validated tools with registry grants/limits, or error if validation fails
+func (h *ChatHandlers) validateTools(ctx context.Context, tenantID domain.UUID, tools []model.Tool) ([]wazero.ValidatedTool, error) {
+	validated := make([]wazero.ValidatedTool, 0, len(tools))
+
+	for _, t := range tools {
+		if t.Type != "function" {
+			continue // Skip non-function tools for now
+		}
+
+		fn := t.Function
+		// Lookup tool in registry by (tenant_id, name)
+		def, err := h.toolRepo.GetByName(ctx, tenantID, fn.Name)
+		if err != nil {
+			h.logger.Warn().Err(err).Str("tool", fn.Name).Str("tenant", tenantID.String()).Msg("Tool not found in registry")
+			return nil, tool.ErrToolNotFound
+		}
+
+		if !def.IsActive {
+			h.logger.Warn().Str("tool", fn.Name).Str("tenant", tenantID.String()).Msg("Tool is inactive")
+			return nil, tool.ErrToolNotFound
+		}
+
+		// Compute hash of request tool definition (name, description, parameters)
+		paramsJSON, _ := json.Marshal(fn.Parameters)
+		requestHash := tool.ComputeHash(fn.Name, fn.Description, paramsJSON)
+
+		// Compare with registry hash
+		if requestHash != def.Hash {
+			h.logger.Error().
+				Str("tool", fn.Name).
+				Str("tenant", tenantID.String()).
+				Str("request_hash", requestHash).
+				Str("registry_hash", def.Hash).
+				Msg("Tool definition hash mismatch - potential attack")
+			// Audit rejection event with severity critical (mismatch = attack signal)
+			// The audit is emitted by the repository layer on failed lookups
+			return nil, tool.ErrToolDefinitionMismatch
+		}
+
+		// Build validated tool with registry grants/limits
+		// Re-enviar al proveedor la definición del registry (no los bytes del request)
+		validated = append(validated, wazero.ValidatedTool{
+			Name:                def.Name,
+			Description:         def.Description,
+			InputSchema:         def.InputSchema,
+			Grants:              def.Grants,
+			ExecutionTimeoutMs:  def.ExecutionTimeoutMs,
+			MemoryPages:         def.MemoryPages,
+			Hash:                def.Hash,
+		})
+	}
+
+	return validated, nil
 }
 
 // parseToolCalls parses tool calls from raw JSON
@@ -242,6 +338,10 @@ func (h *ChatHandlers) mapError(err error) int {
 		return http.StatusForbidden
 	case err == domain.ErrNotFound:
 		return http.StatusNotFound
+	case err == tool.ErrToolNotFound:
+		return http.StatusBadRequest
+	case err == tool.ErrToolDefinitionMismatch:
+		return http.StatusBadRequest
 	case err == model.ErrProviderRateLimited:
 		return http.StatusTooManyRequests
 	case err == model.ErrProviderTimeout:

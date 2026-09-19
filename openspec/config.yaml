@@ -1,0 +1,69 @@
+project: agent-gateway
+persistence:
+  mode: hybrid
+  engram:
+    project: agent-gateway
+  openspec:
+    path: openspec
+strict_tdd: true
+context: |
+  Go 1.25.7 HTTP gateway (Chi router) with PostgreSQL, Redis, JWT auth.
+  Clean/Hexagonal architecture: internal/{adapter,api,config,domain,middleware,usecase}.
+  Entry points: cmd/gateway (server), cmd/bootstrap (DB init).
+  CI: GitHub Actions with postgres/redis services.
+
+testing:
+  projects:
+    - path: "."
+      stack: "Go 1.25.7"
+      test_command: "go test -race -count=1 ./..."
+      framework: "testing, testify, testcontainers"
+  layers:
+    - path: "."
+      layer: Unit
+      available: true
+      tool: "go test, testify"
+    - path: "."
+      layer: Integration
+      available: true
+      tool: "testcontainers (PostgreSQL, Redis), httptest"
+    - path: "."
+      layer: E2E
+      available: false
+      tool: "—"
+  coverage:
+    - path: "."
+      available: false
+      command: "—"
+  quality:
+    - path: "."
+      tool: Linter
+      available: true
+      command: "golangci-lint run ./..."
+    - path: "."
+      tool: Type checker
+      available: true
+      command: "go build ./... (compile check)"
+    - path: "."
+      tool: Formatter
+      available: true
+      command: "gofmt / gofumpt"
+
+phase_rules:
+  proposal:
+    require_approval: true
+    max_lines: 400
+  spec:
+    require_scenarios: true
+    format: "markdown"
+  design:
+    require_architecture_decision: true
+  tasks:
+    max_task_size: 200
+  apply:
+    strict_tdd: true
+  verify:
+    run_tests: true
+    run_lint: true
+  archive:
+    sync_delta_specs: true

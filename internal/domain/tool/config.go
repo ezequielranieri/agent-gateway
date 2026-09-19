@@ -10,17 +10,21 @@ type ToolConfig struct {
 	// Default: 5
 	MaxIterations int `koanf:"max_iterations"`
 
-	// DefaultTimeout is the default wall-time timeout for tool execution.
-	// Default: 30s
-	DefaultTimeout time.Duration `koanf:"default_timeout"`
-
-	// DefaultFuel is the default fuel limit (WebAssembly instructions) for tool execution.
-	// Default: 10_000_000
-	DefaultFuel uint64 `koanf:"default_fuel"`
+	// DefaultTimeoutMs is the default execution timeout in milliseconds for tool execution.
+	// Default: 30000 (30 seconds)
+	DefaultTimeoutMs int64 `koanf:"default_timeout_ms"`
 
 	// DefaultMemoryPages is the default memory limit in 64KB pages for tool execution.
 	// Default: 512 (32MB)
 	DefaultMemoryPages uint32 `koanf:"default_memory_pages"`
+
+	// CacheTTL is the time-to-live for the in-memory tool registry cache.
+	// Default: 5m (can be overridden via TOOL_CACHE_TTL env var)
+	CacheTTL time.Duration `koanf:"cache_ttl"`
+
+	// CacheMaxEntries is the maximum number of entries in the in-memory tool registry cache.
+	// Default: 1000 (can be overridden via TOOL_CACHE_MAX_ENTRIES env var)
+	CacheMaxEntries int `koanf:"cache_max_entries"`
 
 	// Tools is the list of configured tool modules.
 	Tools []ToolModuleConfig `koanf:"tools"`
@@ -64,36 +68,23 @@ type FSMount struct {
 
 // ToolLimits overrides default execution limits.
 type ToolLimits struct {
-	// Timeout is the wall-time timeout for this tool.
-	Timeout time.Duration `koanf:"timeout,omitempty"`
-
-	// Fuel is the instruction limit for this tool (WebAssembly fuel).
-	Fuel uint64 `koanf:"fuel,omitempty"`
+	// TimeoutMs is the execution timeout in milliseconds for this tool.
+	// Valid range: 1-300000 (1ms to 5 minutes)
+	TimeoutMs int64 `koanf:"timeout_ms,omitempty"`
 
 	// MemoryPages is the memory limit in 64KB pages for this tool.
 	MemoryPages uint32 `koanf:"memory_pages,omitempty"`
 }
 
-// EffectiveTimeout returns the timeout for a tool, falling back to default.
-func (tc *ToolConfig) EffectiveTimeout(tool *ToolModuleConfig) time.Duration {
-	if tool.Limits.Timeout > 0 {
-		return tool.Limits.Timeout
+// EffectiveTimeoutMs returns the timeout for a tool in milliseconds, falling back to default.
+func (tc *ToolConfig) EffectiveTimeoutMs(tool *ToolModuleConfig) int64 {
+	if tool.Limits.TimeoutMs > 0 {
+		return tool.Limits.TimeoutMs
 	}
-	if tc.DefaultTimeout > 0 {
-		return tc.DefaultTimeout
+	if tc.DefaultTimeoutMs > 0 {
+		return tc.DefaultTimeoutMs
 	}
-	return 30 * time.Second
-}
-
-// EffectiveFuel returns the fuel limit for a tool, falling back to default.
-func (tc *ToolConfig) EffectiveFuel(tool *ToolModuleConfig) uint64 {
-	if tool.Limits.Fuel > 0 {
-		return tool.Limits.Fuel
-	}
-	if tc.DefaultFuel > 0 {
-		return tc.DefaultFuel
-	}
-	return 10_000_000
+	return 30000 // 30 seconds default
 }
 
 // EffectiveMemoryPages returns the memory limit for a tool, falling back to default.

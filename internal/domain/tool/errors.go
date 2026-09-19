@@ -7,6 +7,10 @@ var (
 	// ErrToolNotFound is returned when a tool is not registered
 	ErrToolNotFound = errors.New("tool not found")
 
+	// ErrToolDefinitionMismatch is returned when request tool definition hash
+	// does not match the registry hash (tampered definition / rug-pull).
+	ErrToolDefinitionMismatch = errors.New("tool definition mismatch")
+
 	// ErrToolTimeout is returned when tool execution exceeds time limit
 	ErrToolTimeout = errors.New("tool execution timeout")
 

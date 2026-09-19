@@ -89,46 +89,45 @@ func computeChainInput(prevHash string, seq int64, tenantID domain.UUID, actorID
 		created
 }
 
-// Append adds an audit event with hash chaining
-// Runs inside WithTenant (tenant-bound transaction)
-// Retries on UNIQUE(tenant_id, seq) conflict with bounded backoff
+// Append adds an audit event with hash chaining.
+// Runs inside WithTenantTx (tenant-bound transaction) and delegates to AppendWithTx.
+// Uses advisory lock to serialize chain appends per tenant, eliminating retries.
 func (r *AuditRepository) Append(ctx context.Context, event *domain.AuditEvent) error {
-	return WithTenant(ctx, r.pool, event.TenantID, func(ctx context.Context) error {
-		return r.appendWithRetry(ctx, event, 3)
+	return WithTenantTx(ctx, r.pool, event.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Acquire advisory lock to serialize chain appends for this tenant
+		// This prevents concurrent writers from racing on the chain tail
+		// Use blocking variant with context deadline; lock released on tx end
+		classID := r.advisoryLockClassID()
+		objID := r.advisoryLockObjectID(event.TenantID)
+		// Acquire lock - blocks until available, respects context deadline
+		_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, classID, objID)
+		if err != nil {
+			return fmt.Errorf("failed to acquire advisory lock: %w", err)
+		}
+		// Lock is held until transaction commits or rolls back
+		return r.AppendWithTx(ctx, tx, event)
 	})
 }
 
-// appendWithRetry attempts to append with retries on unique constraint violation
-func (r *AuditRepository) appendWithRetry(ctx context.Context, event *domain.AuditEvent, maxRetries int) error {
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		err := r.doAppend(ctx, event)
-		if err == nil {
-			return nil
-		}
-
-		// Check if it's a unique constraint violation on (tenant_id, seq)
-		if isUniqueConstraintViolation(err) && attempt < maxRetries {
-			// Exponential backoff: 10ms, 20ms, 40ms...
-			time.Sleep(time.Duration(10*(1<<attempt)) * time.Millisecond)
-			continue
-		}
-
-		return err
-	}
-	return fmt.Errorf("max retries exceeded for audit append")
+// advisoryLockClassID returns a stable class ID for tool registry audit locks
+// This avoids collisions with other advisory locks in the application
+func (r *AuditRepository) advisoryLockClassID() int32 {
+	// Use a fixed class ID for tool registry audit events
+	// 0x74726772 = "trgr" in ASCII (tool registry)
+	return 0x74726772
 }
 
-// isUniqueConstraintViolation checks if the error is a unique constraint violation on (tenant_id, seq)
-func isUniqueConstraintViolation(err error) bool {
-	if err == nil {
-		return false
+// advisoryLockObjectID generates a unique object ID for a tenant
+// Uses first 4 bytes of UUID as int32
+func (r *AuditRepository) advisoryLockObjectID(tenantID domain.UUID) int32 {
+	var key int32
+	for i := 0; i < 4 && i < len(tenantID); i++ {
+		key = (key << 8) | int32(tenantID[i])
 	}
-	errStr := err.Error()
-	return contains(errStr, "uq_audit_events_tenant_seq") ||
-		contains(errStr, "duplicate key value violates unique constraint") ||
-		contains(errStr, "UNIQUE constraint failed")
+	return key
 }
 
+// contains is a simple substring check used for error classification
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && findSubstring(s, substr))
 }
@@ -140,82 +139,6 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
-}
-
-// doAppend performs the actual append operation
-func (r *AuditRepository) doAppend(ctx context.Context, event *domain.AuditEvent) error {
-	// Get the last event for this tenant to compute prev_hash and seq
-	lastEvent, err := r.GetLastEvent(ctx, event.TenantID)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("failed to get last event: %w", err)
-	}
-
-	var prevHash string
-	var seq int64 = 1
-	genesisHash := "0000000000000000000000000000000000000000000000000000000000000000"
-
-	if lastEvent != nil {
-		prevHash = lastEvent.ChainHash
-		seq = lastEvent.Seq + 1
-	} else {
-		prevHash = genesisHash
-	}
-
-	// Canonicalize payload
-	canonicalPayload, err := canonicalizePayload(event.Payload)
-	if err != nil {
-		return fmt.Errorf("failed to canonicalize payload: %w", err)
-	}
-
-	// Compute chain input and hash
-	chainInput := computeChainInput(prevHash, seq, event.TenantID, event.ActorUserID, event.Action, event.EntityType, event.EntityID, canonicalPayload, event.CreatedAt)
-	hashBytes := sha256.Sum256([]byte(chainInput))
-
-	// Prepare actor ID
-	var actorID pgtype.UUID
-	if event.ActorUserID != nil {
-		actorID = pgtype.UUID{Bytes: uuid.UUID(*event.ActorUserID), Valid: true}
-	}
-
-	// Prepare entity ID
-	var entityID pgtype.UUID
-	if event.EntityID != nil {
-		entityID = pgtype.UUID{Bytes: uuid.UUID(*event.EntityID), Valid: true}
-	}
-
-	// Prepare entity type
-	var entityType pgtype.Text
-	if event.EntityType != "" {
-		entityType = pgtype.Text{String: event.EntityType, Valid: true}
-	}
-
-	// Insert the audit event
-	createParams := postgressqlc.CreateAuditEventParams{
-		TenantID:   uuid.UUID(event.TenantID),
-		ActorType:  "user", // Default to user, could be enhanced
-		ActorID:    actorID,
-		Action:     event.Action,
-		EntityType: entityType,
-		EntityID:   entityID,
-		Payload:    canonicalPayload,
-		Severity:   string(event.Severity),
-		Hash:       hashBytes[:],
-	}
-
-	created, err := r.queries.CreateAuditEvent(ctx, createParams)
-	if err != nil {
-		return fmt.Errorf("failed to insert audit event: %w", err)
-	}
-
-	// Update the event with generated values
-	event.ID = domain.UUID(created.ID)
-	event.Seq = created.Seq
-	event.PrevHash = string(created.PrevHash)
-	event.ChainHash = string(created.Hash)
-	event.Payload = canonicalPayload
-	event.CreatedAt = created.CreatedAt
-
-	return nil
 }
 
 // GetLastEvent retrieves the last audit event for a tenant
@@ -336,6 +259,124 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 		return rows.Err()
 	})
 	return events, err
+}
+
+// AppendWithTx adds an audit event with hash chaining within an existing transaction.
+// This is used for atomic audit emission alongside the primary operation (e.g., tool definition write).
+// The transaction must already have the tenant GUC set via WithTenantTx.
+// Acquires advisory lock to serialize chain appends for this tenant.
+func (r *AuditRepository) AppendWithTx(ctx context.Context, tx pgx.Tx, event *domain.AuditEvent) error {
+	// Acquire advisory lock to serialize chain appends for this tenant
+	// Use blocking variant with context deadline; lock released on tx end
+	classID := r.advisoryLockClassID()
+	objID := r.advisoryLockObjectID(event.TenantID)
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, classID, objID)
+	if err != nil {
+		return fmt.Errorf("failed to acquire advisory lock: %w", err)
+	}
+
+	// Get the last event for this tenant to compute prev_hash and seq
+	lastEvent, err := r.getLastEventTx(ctx, tx, event.TenantID)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("failed to get last event: %w", err)
+	}
+
+	var prevHash string
+	var seq int64 = 1
+	genesisHash := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	if lastEvent != nil {
+		prevHash = lastEvent.ChainHash
+		seq = lastEvent.Seq + 1
+	} else {
+		prevHash = genesisHash
+	}
+
+	// Canonicalize payload
+	canonicalPayload, err := canonicalizePayload(event.Payload)
+	if err != nil {
+		return fmt.Errorf("failed to canonicalize payload: %w", err)
+	}
+
+	// Compute chain input and hash
+	chainInput := computeChainInput(prevHash, seq, event.TenantID, event.ActorUserID, event.Action, event.EntityType, event.EntityID, canonicalPayload, event.CreatedAt)
+	hashBytes := sha256.Sum256([]byte(chainInput))
+
+	// Prepare actor ID
+	var actorID pgtype.UUID
+	if event.ActorUserID != nil {
+		actorID = pgtype.UUID{Bytes: uuid.UUID(*event.ActorUserID), Valid: true}
+	}
+
+	// Prepare entity ID
+	var entityID pgtype.UUID
+	if event.EntityID != nil {
+		entityID = pgtype.UUID{Bytes: uuid.UUID(*event.EntityID), Valid: true}
+	}
+
+	// Prepare entity type
+	var entityType pgtype.Text
+	if event.EntityType != "" {
+		entityType = pgtype.Text{String: event.EntityType, Valid: true}
+	}
+
+	// Insert the audit event using the transaction
+	createParams := postgressqlc.CreateAuditEventParams{
+		TenantID:   uuid.UUID(event.TenantID),
+		ActorType:  "user", // Default to user, could be enhanced
+		ActorID:    actorID,
+		Action:     event.Action,
+		EntityType: entityType,
+		EntityID:   entityID,
+		Payload:    canonicalPayload,
+		Severity:   string(event.Severity),
+		Hash:       hashBytes[:],
+	}
+
+	created, err := r.queries.CreateAuditEvent(ctx, createParams)
+	if err != nil {
+		return fmt.Errorf("failed to insert audit event: %w", err)
+	}
+
+	// Update the event with generated values
+	event.ID = domain.UUID(created.ID)
+	event.Seq = created.Seq
+	event.PrevHash = string(created.PrevHash)
+	event.ChainHash = string(created.Hash)
+	event.Payload = canonicalPayload
+	event.CreatedAt = created.CreatedAt
+
+	return nil
+}
+
+// getLastEventTx retrieves the last audit event for a tenant using an existing transaction
+func (r *AuditRepository) getLastEventTx(ctx context.Context, tx pgx.Tx, tenantID domain.UUID) (*domain.AuditEvent, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id, tenant_id, seq, actor_type, actor_id, action, entity_type, entity_id, payload, severity, prev_hash, hash, created_at
+		FROM public.audit_events
+		WHERE tenant_id = $1
+		ORDER BY seq DESC
+		LIMIT 1
+	`, uuid.UUID(tenantID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, sql.ErrNoRows
+	}
+
+	var i postgressqlc.AuditEvent
+	if err := rows.Scan(
+		&i.ID, &i.TenantID, &i.Seq, &i.ActorType, &i.ActorID,
+		&i.Action, &i.EntityType, &i.EntityID, &i.Payload,
+		&i.Severity, &i.PrevHash, &i.Hash, &i.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+
+	return convertSQLCAuditEvent(i), nil
 }
 
 // VerifyChain verifies the hash chain for a tenant from fromSeq to toSeq
