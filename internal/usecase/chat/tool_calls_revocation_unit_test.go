@@ -71,10 +71,12 @@ func (f *fakeAuditRepository) Clear() {
 
 // fakeToolRepository implements tool.ToolRepository for unit tests
 type fakeToolRepository struct {
-	mu        sync.Mutex
-	tools     map[string]*tool.ToolDefinition
-	err       error
-	auditRepo *fakeAuditRepository
+	mu           sync.Mutex
+	tools        map[string]*tool.ToolDefinition
+	err          error
+	auditRepo    *fakeAuditRepository
+	getByNameCalls int
+	lastGetByNameName string
 }
 
 func newFakeToolRepository(auditRepo *fakeAuditRepository) *fakeToolRepository {
@@ -82,6 +84,18 @@ func newFakeToolRepository(auditRepo *fakeAuditRepository) *fakeToolRepository {
 		tools:     make(map[string]*tool.ToolDefinition),
 		auditRepo: auditRepo,
 	}
+}
+
+func (f *fakeToolRepository) GetByNameCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.getByNameCalls
+}
+
+func (f *fakeToolRepository) LastGetByNameName() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastGetByNameName
 }
 
 func (f *fakeToolRepository) setError(err error) {
@@ -116,6 +130,8 @@ func (f *fakeToolRepository) updateToolHash(tenantID domain.UUID, name string, n
 func (f *fakeToolRepository) GetByName(ctx context.Context, tenantID domain.UUID, name string) (*tool.ToolDefinition, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.getByNameCalls++
+	f.lastGetByNameName = name
 	if f.err != nil {
 		if f.auditRepo != nil {
 			f.auditRepo.Append(ctx, &domain.AuditEvent{
@@ -386,7 +402,14 @@ func TestToolCalls_RevocationAndValidation_Unit(t *testing.T) {
 		// The final response should be the model's response after receiving the tool rejection
 		assert.Contains(t, choice.Message.Content, "rejected", "Expected response mentioning tool rejection")
 
-		// Note: No audit event expected here - rejection happens at authorized set check (before re-resolution/GetByName)
+		// Verify rejection happened at authorized set check (before re-resolution)
+		// No GetByName call should be made for the unauthorized tool
+		assert.Equal(t, 0, fakeRepo.GetByNameCalls(), "GetByName should not be called - rejection happens at authorized set check")
+		assert.Equal(t, "", fakeRepo.LastGetByNameName(), "GetByName should not be called for unauthorized tool")
+
+		// Verify no audit events emitted
+		events := auditRepo.GetEvents()
+		require.Len(t, events, 0, "No audit events should be emitted - rejection happens at authorized set check")
 	})
 
 	t.Run("Tool call for different tenant rejected", func(t *testing.T) {
