@@ -5,6 +5,7 @@ package wazero
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -75,13 +76,24 @@ t.Run("Memory grow exceeding limit fails with resource exhausted", func(t *testi
 		// 2. Checks if result is -1 (failed)
 		// 3. If -1, executes unreachable (trap)
 		
+		vt := &ValidatedTool{
+			Name:                "memory_grow_tool",
+			Description:         "Memory grow tool",
+			InputSchema:         json.RawMessage(`{}`),
+			Grants:              json.RawMessage(`[]`),
+			ExecutionTimeoutMs:  10000,
+			MemoryPages:         256,
+			Hash:                "test-hash",
+		}
+		ctxWithTool := WithValidatedTool(ctx, vt)
+		
 		call := tool.ToolCall{
 			ID:        "test-1",
 			Name:      "memory_grow_tool",
 			Arguments: map[string]any{},
 		}
 
-		result, err := executor.Execute(ctx, call)
+		result, err := executor.Execute(ctxWithTool, call)
 		
 		// Should fail with resource exhausted error (or trap from unreachable)
 		assert.Error(t, err)
@@ -97,13 +109,24 @@ t.Run("Memory grow exceeding limit fails with resource exhausted", func(t *testi
 		// This test requires a WASM module with min_memory > bucket limit
 		// The module should fail to instantiate
 		
+		vt := &ValidatedTool{
+			Name:                "min_memory_exceed_tool",
+			Description:         "Min memory exceed tool",
+			InputSchema:         json.RawMessage(`{}`),
+			Grants:              json.RawMessage(`[]`),
+			ExecutionTimeoutMs:  10000,
+			MemoryPages:         256,
+			Hash:                "test-hash",
+		}
+		ctxWithTool := WithValidatedTool(ctx, vt)
+		
 		call := tool.ToolCall{
 			ID:   "test-2",
 			Name: "min_memory_exceed_tool",
 			Arguments: map[string]any{},
 		}
 
-		result, err := executor.Execute(ctx, call)
+		result, err := executor.Execute(ctxWithTool, call)
 		
 		// Should fail at instantiation (memory limit exceeded)
 		assert.Error(t, err, "Expected error for min_memory_exceed_tool, got nil")
@@ -119,6 +142,17 @@ t.Run("Memory grow exceeding limit fails with resource exhausted", func(t *testi
 		// This test requires a WASM module with infinite loop
 		// Should be terminated by context timeout + WithCloseOnContextDone
 		
+		vt := &ValidatedTool{
+			Name:                "infinite_loop_tool",
+			Description:         "Infinite loop tool",
+			InputSchema:         json.RawMessage(`{}`),
+			Grants:              json.RawMessage(`[]`),
+			ExecutionTimeoutMs:  2000,
+			MemoryPages:         256,
+			Hash:                "test-hash",
+		}
+		ctxWithTool := WithValidatedTool(ctx, vt)
+		
 		call := tool.ToolCall{
 			ID:   "test-3",
 			Name: "infinite_loop_tool",
@@ -126,7 +160,7 @@ t.Run("Memory grow exceeding limit fails with resource exhausted", func(t *testi
 		}
 
 		start := time.Now()
-		result, err := executor.Execute(ctx, call)
+		result, err := executor.Execute(ctxWithTool, call)
 		duration := time.Since(start)
 		
 		// Should fail with timeout error (not success)

@@ -180,29 +180,22 @@ func (w *WasmExecutor) getMemoryBucket(tc tool.ToolModuleConfig) uint32 {
 }
 
 // getExecutionTimeout returns the execution timeout for a tool in milliseconds
-// Returns 0 if no limits are explicitly configured (fail-closed)
-func (w *WasmExecutor) getExecutionTimeout(tc *tool.ToolModuleConfig, validatedTool *ValidatedTool) int64 {
-	// Priority: validated tool (from registry) -> tool config -> config default
-	var timeoutMs int64
-
-	if validatedTool != nil {
-		// Registry limits take precedence (execution_timeout_ms from registry)
-		timeoutMs = int64(validatedTool.ExecutionTimeoutMs)
+// Returns 0 if no limits are explicitly configured in the registry (fail-closed)
+func (w *WasmExecutor) getExecutionTimeout(validatedTool *ValidatedTool) int64 {
+	// Registry limits are mandatory - fail-closed if not set
+	if validatedTool == nil {
+		return 0 // Not in context = fail-closed
 	}
-
-	if timeoutMs == 0 && tc.Limits.TimeoutMs > 0 {
-		timeoutMs = tc.Limits.TimeoutMs
+	if validatedTool.ExecutionTimeoutMs == 0 {
+		return 0 // Registry didn't set limit = fail-closed
 	}
-
-	if timeoutMs == 0 && w.config.DefaultTimeoutMs > 0 {
+	
+	// Config default is a CEILING (max allowed), not a fallback
+	timeoutMs := int64(validatedTool.ExecutionTimeoutMs)
+	if w.config.DefaultTimeoutMs > 0 && timeoutMs > w.config.DefaultTimeoutMs {
 		timeoutMs = w.config.DefaultTimeoutMs
 	}
-
-	// FAIL-CLOSED: If no explicit timeout configured anywhere, return 0 to trigger fail-closed
-	if timeoutMs == 0 {
-		return 0
-	}
-
+	
 	// Clamp to valid range
 	if timeoutMs < MinTimeoutMs {
 		timeoutMs = MinTimeoutMs
@@ -210,32 +203,28 @@ func (w *WasmExecutor) getExecutionTimeout(tc *tool.ToolModuleConfig, validatedT
 	if timeoutMs > MaxTimeoutMs {
 		timeoutMs = MaxTimeoutMs
 	}
-
+	
 	return timeoutMs
 }
 
-// getMemoryBucketFromValidated returns the appropriate memory bucket
-// Priority: validated tool (from registry) -> tool config -> config default
-func (w *WasmExecutor) getMemoryBucketFromValidated(validatedTool *ValidatedTool, tc *tool.ToolModuleConfig) uint32 {
-	var memPages uint32
-
-	if validatedTool != nil {
-		// Registry limits take precedence (memory_pages from registry)
-		memPages = validatedTool.MemoryPages
+// getMemoryBucketFromValidated returns the appropriate memory bucket from registry
+// Returns 0 if no limits in registry (fail-closed)
+func (w *WasmExecutor) getMemoryBucketFromValidated(validatedTool *ValidatedTool) uint32 {
+	// Registry limits are mandatory - fail-closed if not set
+	if validatedTool == nil {
+		return 0
 	}
-
-	if memPages == 0 && tc.Limits.MemoryPages > 0 {
-		memPages = tc.Limits.MemoryPages
+	if validatedTool.MemoryPages == 0 {
+		return 0 // Registry didn't set limit = fail-closed
 	}
-
-	if memPages == 0 && w.config.DefaultMemoryPages > 0 {
+	
+	memPages := validatedTool.MemoryPages
+	
+	// Config default is a CEILING (max allowed), not a fallback
+	if w.config.DefaultMemoryPages > 0 && memPages > w.config.DefaultMemoryPages {
 		memPages = w.config.DefaultMemoryPages
 	}
-
-	if memPages == 0 {
-		memPages = 512
-	}
-
+	
 	// Round up to next bucket
 	for _, bucket := range MemoryBuckets {
 		if memPages <= bucket {
@@ -403,17 +392,16 @@ func (w *WasmExecutor) Execute(ctx context.Context, call tool.ToolCall) (tool.To
 		}, tool.ErrToolNotFound
 	}
 
-// 2. Resolve execution limits (fail-closed if no limits)
-	// Retrieve validated tool from context (registry limits take precedence)
+// 2. Resolve execution limits from registry (fail-closed if not set)
 	validatedTool := getValidatedToolFromContext(ctx, call.Name)
-	timeoutMs := w.getExecutionTimeout(tc, validatedTool)
+	timeoutMs := w.getExecutionTimeout(validatedTool)
 
 	// Resolve memory bucket from registry limits
-	bucket = w.getMemoryBucketFromValidated(validatedTool, tc)
+	bucket = w.getMemoryBucketFromValidated(validatedTool)
 
-	// FAIL-CLOSED: If no limits configured anywhere, reject immediately
-	if timeoutMs <= 0 {
-		w.logger.Error().Str("tool", call.Name).Msg("Execution rejected: no resource limits configured (fail-closed)")
+	// FAIL-CLOSED: If no limits from registry, reject immediately
+	if timeoutMs <= 0 || bucket == 0 {
+		w.logger.Error().Str("tool", call.Name).Msg("Execution rejected: no resource limits from registry (fail-closed)")
 		return tool.ToolResult{
 			CallID:   call.ID,
 			Error:    ErrInvalidLimits.Error(),
