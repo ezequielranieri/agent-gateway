@@ -864,4 +864,91 @@ t.Run("Provider receives registry definition, not request bytes - parameters can
 		// Note: Audit event for hash mismatch is emitted by repository layer
 		// during ValidateTool call (verified above), not by handler validateTools
 	})
+
+	t.Run("Mutation #2: reenviar RawMessage original sin canonicalizar es detectado", func(t *testing.T) {
+		auditRepo.Clear()
+
+		fakeRepo.addTool(tenantID, &tool.ToolDefinition{
+			TenantID:             tenantID,
+			Name:                 toolNameSpecial,
+			Description:          descriptionSpecial,
+			InputSchema:          paramsSpecial,
+			Grants:               grantsSpecial,
+			ExecutionTimeoutMs:   5000000,
+			MemoryPages:          256,
+			Hash:                 hashSpecial,
+			IsActive:             true,
+		})
+
+		// Request with parameters that are JCS-equivalent to registry but DIFFERENT bytes
+		// - Different key order
+		// - Float 1.0 instead of 1 (JCS canonicalizes to 1)
+		// - Unicode escapes \u003c instead of <
+		// - Extra whitespace
+		equivalentButDifferentBytes := json.RawMessage(`{"required":["value"],"type":"object","properties":{"value":{"type":"number"}}}`)
+
+		// Verify precondición: los bytes del request SON distintos de los del registry
+		requestParamsBytes, _ := json.Marshal(json.RawMessage(`{"required":["value"],"type":"object","properties":{"value":{"type":"number"}}}`))
+		registryParamsBytes, _ := json.Marshal(paramsSpecial)
+		assert.NotEqual(t, string(requestParamsBytes), string(registryParamsBytes), 
+			"Precondición: los bytes del request deben ser distintos de los del registry")
+
+		reqBody := map[string]interface{}{
+			"model": "test-model",
+			"messages": []map[string]string{
+				{"role": "user", "content": "test special"},
+			},
+			"tools": []map[string]interface{}{
+				{
+					"type": "function",
+					"function": map[string]interface{}{
+						"name":        toolNameSpecial,
+						"description": descriptionSpecial,
+						"parameters":  equivalentButDifferentBytes,
+					},
+				},
+			},
+		}
+
+		buf, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBuffer(buf))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// Should succeed (validation passes)
+		assert.NotEqual(t, http.StatusBadRequest, w.Code)
+
+		// Verify provider received EXACTLY the registry definition (canonicalized), NOT the request bytes
+		lastReqRaw := mockProvider.getLastRequestRaw()
+		
+		// Build expected provider request with registry definition
+		var registryParams map[string]any
+		json.Unmarshal(paramsSpecial, &registryParams)
+		
+		expectedProviderReq := model.ChatRequest{
+			Model: "test-model",
+			Messages: []model.Message{
+				{Role: "user", Content: "test special"},
+			},
+			Tools: []model.Tool{
+				{
+					Type: "function",
+					Function: model.FunctionDef{
+						Name:        toolNameSpecial,
+						Description: descriptionSpecial,
+						Parameters:  registryParams, // Registry version (canonicalized)
+					},
+				},
+			},
+			User: userID.String(),
+		}
+		expectedRaw, _ := json.Marshal(expectedProviderReq)
+		
+		// Exact byte comparison - mutation #2 would fail this
+		assert.Equal(t, string(expectedRaw), string(lastReqRaw), 
+			"Mutation #2: provider debe recibir EXACTAMENTE los bytes del registry (canonicalizado), no los del request")
+	})
 }
