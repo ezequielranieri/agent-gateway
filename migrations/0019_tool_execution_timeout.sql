@@ -31,3 +31,16 @@ ALTER TABLE public.tool_definitions
 
 -- Update column comment
 COMMENT ON COLUMN public.tool_definitions.execution_timeout_ms IS 'Maximum execution timeout in milliseconds (1-300000). Replaces fuel_limit for timeout-based enforcement.';
+
+-- +goose Down
+-- Rollback: Re-add fuel_limit, drop execution_timeout_ms
+
+-- Add fuel_limit column back
+ALTER TABLE public.tool_definitions 
+    ADD COLUMN IF NOT EXISTS fuel_limit bigint NOT NULL DEFAULT 10000000;
+
+-- Approximate reverse conversion: fuel_limit = timeout_ms * 1000000 / 3
+UPDATE public.tool_definitions SET fuel_limit = execution_timeout_ms * 1000000 / 3;
+
+-- Drop execution_timeout_ms column
+ALTER TABLE public.tool_definitions DROP COLUMN IF EXISTS execution_timeout_ms;

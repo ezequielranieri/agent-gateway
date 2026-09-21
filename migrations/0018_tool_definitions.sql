@@ -44,3 +44,8 @@ COMMENT ON COLUMN public.tool_definitions.grants IS 'Array of grant strings (e.g
 COMMENT ON COLUMN public.tool_definitions.fuel_limit IS 'Maximum WASM fuel units per execution (0 = use config default)';
 COMMENT ON COLUMN public.tool_definitions.memory_pages IS 'Maximum WASM memory pages per execution (64KB each, 0 = use config default)';
 COMMENT ON COLUMN public.tool_definitions.hash IS 'SHA-256 lowercase hex (64 chars) of canonical JSON: name, description, parameters';
+
+-- +goose Down
+-- Drop tool_definitions table
+
+DROP TABLE IF EXISTS public.tool_definitions;
