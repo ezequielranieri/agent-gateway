@@ -61,12 +61,21 @@ jobs:
         run: |
           go install github.com/pressly/goose/v3/cmd/goose@latest
           goose -dir migrations postgres "$DATABASE_URL" up
+      - name: Create test role and set test DSN
+        run: |
+          psql "$DATABASE_URL" -c "CREATE ROLE gateway_test WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'gateway_test';"
+          psql "$DATABASE_URL" -c "GRANT USAGE ON SCHEMA public TO gateway_test;"
+          psql "$DATABASE_URL" -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gateway_test;"
+          psql "$DATABASE_URL" -c "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gateway_test;"
+      - name: Verify test role
+        run: |
+          psql "postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable" -c "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;"
       - name: Run unit tests
         run: go test -count=1 ./internal/...
       - name: Run integration tests
         run: go test -tags integration -count=1 -v ./...
         env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          TEST_DATABASE_URL: postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable
       - name: Check for SKIP in test output
         run: |
           # This step runs integration tests again to check for SKIP

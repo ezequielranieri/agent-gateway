@@ -47,6 +47,17 @@ type TestContainer struct {
 	Cancel         context.CancelFunc
 }
 
+// checkTestRole verifies the current database role is not superuser/bypassrls
+func checkTestRole(t *testing.T, dbPool *pgxpool.Pool) {
+	ctx := context.Background()
+	var privileged bool
+	err := dbPool.QueryRow(ctx,
+		`SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user`).Scan(&privileged)
+	if err != nil || privileged {
+		t.Fatalf("test role must be NOSUPERUSER NOBYPASSRLS (err=%v, privileged=%v)", err, privileged)
+	}
+}
+
 // SetupTestContainers starts PostgreSQL and Redis containers and applies migrations
 func SetupTestContainers(t *testing.T) *TestContainer {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -93,6 +104,9 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	// Apply migrations matching production schema
 	err = ApplyMigrations(ctx, dbPool)
 	require.NoError(t, err)
+
+	// Verify test role is NOSUPERUSER NOBYPASSRLS
+	checkTestRole(t, dbPool)
 
 	// Connect to Redis
 	redisClient := redis.NewClient(&redis.Options{
