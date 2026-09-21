@@ -55,11 +55,12 @@ jobs:
           cache: true
       - name: Install sqlc
         run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@v3.27.0
       - name: Generate sqlc code
         run: sqlc generate
       - name: Run migrations
         run: |
-          go install github.com/pressly/goose/v3/cmd/goose@latest
           goose -dir migrations postgres "$DATABASE_URL" up
       - name: Create test role and set test DSN
         run: |
