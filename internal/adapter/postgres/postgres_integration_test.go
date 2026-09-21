@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -49,9 +50,15 @@ func setupTestContainer(t *testing.T) (*pgxpool.Pool, *sql.DB, func()) {
 		t.Fatal(err)
 	}
 
+	// Get absolute path to migrations directory
+	migrationsPath, err := filepath.Abs(filepath.Join("..", "..", "..", "migrations"))
+	if err != nil {
+		t.Fatalf("Failed to get migrations path: %v", err)
+	}
+
 	// Apply migrations
 	goose.SetBaseFS(nil)
-	if err := goose.Up(sqlDB, "migrations"); err != nil {
+	if err := goose.Up(sqlDB, migrationsPath); err != nil {
 		t.Fatal(err)
 	}
 

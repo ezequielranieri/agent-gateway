@@ -72,7 +72,9 @@ jobs:
         run: |
           psql "postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable" -c "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;"
       - name: Run unit tests
-        run: go test -count=1 ./internal/...
+        run: go test -tags=unit -count=1 ./internal/...
+        env:
+          TEST_DATABASE_URL: postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable
       - name: Run integration tests
         run: go test -tags integration -count=1 -v ./...
         env:
@@ -104,6 +106,8 @@ jobs:
           if [ "$skip_found" = true ]; then
             exit 1
           fi
+        env:
+          TEST_DATABASE_URL: postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable
 
   build:
     name: Build & Push Docker Image
