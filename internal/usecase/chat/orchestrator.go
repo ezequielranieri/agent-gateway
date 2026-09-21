@@ -346,6 +346,16 @@ func (uc *ChatUsecase) executeToolLoop(
 	return currentResult, nil
 }
 
+// ExecuteToolLoopForTest exposes executeToolLoop for unit testing
+func (uc *ChatUsecase) ExecuteToolLoopForTest(
+	ctx context.Context,
+	req ChatRequest,
+	domainReq model.ChatRequest,
+	result FallbackResult,
+) (FallbackResult, error) {
+	return uc.executeToolLoop(ctx, req, domainReq, result)
+}
+
 // toolRequiresApproval checks if a tool requires HITL approval
 func (uc *ChatUsecase) toolRequiresApproval(toolName string) bool {
 	if uc.toolConfig == nil {
@@ -455,17 +465,44 @@ func BuildChatUsecaseFromConfig(
 	pricing model.PricingService,
 	logger zerolog.Logger,
 ) (*ChatUsecase, error) {
-	// Build registry
-	registry, err := BuildRegistryFromConfig(ctx, cfg, logger)
-	if err != nil {
-		return nil, fmt.Errorf("build registry: %w", err)
+	return BuildChatUsecaseFromConfigWithProvider(ctx, cfg, toolCfg, toolExecutor, toolRepo, pricing, logger, nil)
+}
+
+// BuildChatUsecaseFromConfigWithProvider creates a fully configured ChatUsecase from config
+// If provider is not nil, it's used instead of building from config (for testing)
+func BuildChatUsecaseFromConfigWithProvider(
+	ctx context.Context,
+	cfg model.RouterConfig,
+	toolCfg *tool.ToolConfig,
+	toolExecutor tool.ToolExecutor,
+	toolRepo tool.ToolRepository,
+	pricing model.PricingService,
+	logger zerolog.Logger,
+	provider model.ModelProvider,
+) (*ChatUsecase, error) {
+	var registry *ProviderRegistry
+	var router *Router
+	var fallbackChain *FallbackChain
+	
+	if provider != nil {
+		// Use provided provider directly (for testing)
+		registry = NewProviderRegistry(logger)
+		// Create a fake provider config to register
+		fakePC := model.ProviderConfig{Name: "test", Models: []string{"test-model"}, Enabled: true}
+		registry.Register(fakePC, provider)
+		router = NewRouter(registry, logger)
+		fallbackChain = NewFallbackChain(router, pricing, cfg, logger)
+	} else {
+		// Build from config (production)
+		var err error
+		registry, err = BuildRegistryFromConfig(ctx, cfg, logger)
+		if err != nil {
+			return nil, fmt.Errorf("build registry: %w", err)
+		}
+		
+		router = NewRouter(registry, logger)
+		fallbackChain = NewFallbackChain(router, pricing, cfg, logger)
 	}
-	
-	// Create router
-	router := NewRouter(registry, logger)
-	
-	// Create fallback chain
-	fallbackChain := NewFallbackChain(router, pricing, cfg, logger)
 	
 	// Create usecase
 	usecase := NewChatUsecase(
@@ -486,8 +523,10 @@ func BuildChatUsecaseFromConfig(
 		logger,
 	)
 	
-	// Start periodic health checks
-	registry.StartPeriodicHealthChecks(ctx, 30*time.Second)
+	// Start periodic health checks only if built from config
+	if provider == nil {
+		registry.StartPeriodicHealthChecks(ctx, 30*time.Second)
+	}
 	
 	return usecase, nil
 }

@@ -279,10 +279,6 @@ func TestClient_Complete_ServerError(t *testing.T) {
 	assert.ErrorIs(t, err, model.ErrProviderUnavailable)
 }
 
-func TestClient_Complete_Timeout(t *testing.T) {
-	t.Skip("Skipping timeout test - httptest.Server blocks on close with hanging connections")
-}
-
 func TestMapError(t *testing.T) {
 	tests := []struct {
 		name       string

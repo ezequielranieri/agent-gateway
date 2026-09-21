@@ -1,3 +1,6 @@
+//go:build integration
+// +build integration
+
 package handlers
 
 import (
@@ -16,15 +19,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/tool/wazero"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
 	"github.com/ezequielranieri/agent-gateway/internal/domain/tool"
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/chat"
 )
-
-//go:build integration
-// +build integration
 
 func TestChatHandler_Validation(t *testing.T) {
 	if testing.Short() {
@@ -65,7 +66,7 @@ func TestChatHandler_Validation(t *testing.T) {
 	grants := json.RawMessage(`["filesystem:read"]`)
 	hash := tool.ComputeHash(toolName, description, parameters)
 
-	err := createTestTool(ctx, dbPool, tenantID, toolName, description, parameters, grants, 5000000, 256, hash)
+	err = createTestTool(ctx, dbPool, tenantID, toolName, description, parameters, grants, 5000000, 256, hash)
 	require.NoError(t, err)
 
 	// Build chat handler with tool validation
@@ -76,53 +77,54 @@ func TestChatHandler_Validation(t *testing.T) {
 		CacheMaxEntries:    1000,
 		Tools: []tool.ToolModuleConfig{
 			{
-				Name:        toolName,
-				ModulePath:  getTestWASMPath(t, "echo.wasm"),
-				Grants:      tool.ToolGrants{FSReadOnlyMounts: nil, AllowNetwork: false},
-				Limits:      tool.ToolLimits{TimeoutMs: 10000, MemoryPages: 256},
+				Name:             toolName,
+				ModulePath:       getTestWASMPath(t, "echo.wasm"),
+				Grants:           tool.ToolGrants{FSReadOnlyMounts: nil, AllowNetwork: false},
+				Limits:           tool.ToolLimits{TimeoutMs: 10000, MemoryPages: 256},
 				RequiresApproval: false,
 			},
-		}
+		},
+	}
 
-		// Create executor for tool execution
-		toolExecutor, err := NewWasmExecutor(toolConfig, logger)
-		require.NoError(t, err)
-		defer toolExecutor.Close(context.Background())
+	// Create executor for tool execution
+	toolExecutor, err := wazero.NewWasmExecutor(toolConfig, logger)
+	require.NoError(t, err)
+	defer toolExecutor.Close(context.Background())
 
-		// Build chat usecase with tool validation
-		chatUC, err := chat.BuildChatUsecaseFromConfig(
-			ctx,
-			chat.RouterConfig{
-				Providers: []model.ProviderConfig{
-					{Name: "test-provider", Type: model.ProviderTypeMock, Models: []string{"test-model"}, Enabled: true},
-				},
-				DefaultTimeout: 30 * time.Second,
+	// Build chat usecase with tool validation
+	chatUC, err := chat.BuildChatUsecaseFromConfig(
+		ctx,
+		model.RouterConfig{
+			Providers: []model.ProviderConfig{
+				{Name: "test-provider", Type: model.ProviderTypeMock, Models: []string{"test-model"}, Enabled: true},
 			},
-			toolConfig,
-			toolExecutor,
-			nil, // pricing service
-			logger,
-		)
-		require.NoError(t, err)
+			DefaultTimeout: 30 * time.Second,
+		},
+		&toolConfig,
+		toolExecutor,
+		toolRepo,
+		nil, // pricing service
+		logger,
+	)
+	require.NoError(t, err)
 
-		chatHandlers := NewChatHandlers(logger, chatUC, toolRepo)
+	chatHandlers := NewChatHandlers(logger, chatUC, toolRepo)
 
-		router := chi.NewRouter()
-		router.Use(authMW)
-		router.Post("/v1/chat/completions", chatHandlers.ChatCompletions)
+	router := chi.NewRouter()
+	router.Use(authMW)
+	router.Post("/v1/chat/completions", chatHandlers.ChatCompletions)
 
-		t.Run("Valid tool with correct hash passes validation", func(t *testing.T) {
-			reqBody := map[string]interface{}{
-				"model": "test-model",
-				"messages": []map[string]string{
-					{"role": "user", "content": "read a file"},
-				},
-				"tools": []map[string]interface{}{
-					{
-						"name":        toolName,
-						"description": description,
-						"parameters":  map[string]interface{}{"type": "object", "properties": {"path": {"type": "string"}}, "required": []string{"path"}},
-					},
+	t.Run("Valid tool with correct hash passes validation", func(t *testing.T) {
+		reqBody := map[string]interface{}{
+			"model": "test-model",
+			"messages": []map[string]string{
+				{"role": "user", "content": "read a file"},
+			},
+			"tools": []map[string]interface{}{
+				{
+					"name":        toolName,
+					"description": description,
+					"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}}, "required": []string{"path"}},
 				},
 			},
 		}
@@ -168,7 +170,7 @@ func TestChatHandler_Validation(t *testing.T) {
 		assert.Equal(t, "tool_not_found", resp["error"])
 	})
 
-	t.Run("Known tool with hash mismatch rejected with tool_definition_mismatch", func(t *testing.T) {
+t.Run("Known tool with hash mismatch rejected with tool_definition_mismatch", func(t *testing.T) {
 		reqBody := map[string]interface{}{
 			"model": "test-model",
 			"messages": []map[string]string{
@@ -178,7 +180,7 @@ func TestChatHandler_Validation(t *testing.T) {
 				{
 					"name":        toolName,
 					"description": "MODIFIED DESCRIPTION - hash will differ",
-					"parameters":  map[string]interface{}{"type": "object", "properties": {"path": {"type": "string"}}, "required": []string{"path"}},
+					"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}}, "required": []string{"path"}},
 				},
 			},
 		}
@@ -219,15 +221,15 @@ func TestChatHandler_Validation(t *testing.T) {
 			},
 			"tools": []map[string]interface{}{
 				{
-					"name":        otherToolName,
-					"description": otherDesc,
-					"parameters":  map[string]interface{}{"type": "object", "properties": {"input": {"type": "string"}}},
-				},
+"name":        otherToolName,
+				"description": otherDesc,
+				"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"input": map[string]interface{}{"type": "string"}}},
 			},
-			"tenant_id": otherTenantID.String(), // This should be IGNORED
-		}
+		},
+		"tenant_id": otherTenantID.String(), // This should be IGNORED
+	}
 
-		buf, _ := json.Marshal(reqBody)
+	buf, _ := json.Marshal(reqBody)
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBuffer(buf))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -242,7 +244,7 @@ func TestChatHandler_Validation(t *testing.T) {
 		assert.Equal(t, "tool_not_found", resp["error"])
 	})
 
-	t.Run("Multiple tools - one invalid rejects entire request", func(t *testing.T) {
+t.Run("Multiple tools - one invalid rejects entire request", func(t *testing.T) {
 		reqBody := map[string]interface{}{
 			"model": "test-model",
 			"messages": []map[string]string{
@@ -252,7 +254,7 @@ func TestChatHandler_Validation(t *testing.T) {
 				{
 					"name":        toolName,
 					"description": description,
-					"parameters":  map[string]interface{}{"type": "object", "properties": {"path": {"type": "string"}}, "required": []string{"path"}},
+					"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}}, "required": []string{"path"}},
 				},
 				{
 					"name":        "evil_tool",

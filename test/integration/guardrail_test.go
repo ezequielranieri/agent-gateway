@@ -23,6 +23,7 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/redis"
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/tool/mock"
 	pgadapter "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
+	"github.com/ezequielranieri/agent-gateway/internal/domain/tool"
 	"github.com/ezequielranieri/agent-gateway/internal/api"
 	"github.com/ezequielranieri/agent-gateway/internal/api/handlers"
 	"github.com/ezequielranieri/agent-gateway/internal/config"
@@ -196,16 +197,17 @@ func CreateTestRouterWithRealGuardrails(t *testing.T, tc *TestContainer, logger 
 		mockPricing,
 		mockRouter,
 		mockToolExecutor,
-		nil, // tool config (nil for tests)
+		&tool.ToolConfig{}, // tool config (empty for tests)
+		pgadapter.NewToolRepository(tc.DBPool, pgadapter.NewAuditRepository(tc.DBPool), logger, 5*time.Minute, 1000),
 		chat.ChatUsecaseConfig{
-			DefaultTimeout: 30 * time.Second,
-			EnableCostTracking: true,
-			MaxIterations: 5,
+			DefaultTimeout:      30 * time.Second,
+			EnableCostTracking:  true,
+			MaxIterations:       5,
 		},
 		logger,
 	)
 	
-	chatHandlers := handlers.NewChatHandlers(logger, mockChatUC)
+	chatHandlers := handlers.NewChatHandlers(logger, mockChatUC, pgadapter.NewToolRepository(tc.DBPool, pgadapter.NewAuditRepository(tc.DBPool), logger, 5*time.Minute, 1000))
 	adminAuditHandlers := handlers.NewAdminAuditHandlers(auditRepo, logger)
 	reviewHandlers := handlers.NewReviewHandlers(hitlUC, reviewRepo, string(signingKey), logger)
 

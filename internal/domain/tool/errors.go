@@ -25,4 +25,7 @@ var (
 
 	// ErrMaxIterationsExceeded is returned when max tool iterations exceeded
 	ErrMaxIterationsExceeded = errors.New("max iterations exceeded")
+
+	// ErrToolRepository is returned when tool repository is unavailable
+	ErrToolRepository = errors.New("tool repository unavailable")
 )

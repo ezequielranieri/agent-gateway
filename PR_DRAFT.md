@@ -36,8 +36,9 @@ tool-registry (Front A)
 | **CI/CD Guards** | ✅ Activos | `-tags integration`, `TEST_DATABASE_URL`, `check-skip`, `check-disabled` |
 | **Phase 2 Tests (unit)** | ✅ Verdes | Domain, config, hash tests |
 | **Phase 2 Tests (integration)** | ⏳ **Sin ejecutar** | Requieren `TEST_DATABASE_URL` con Postgres no-superuser |
-| **Phase 3 Tests (wazero)** | ✅ Compilan | Fixtures listos, tests compilan |
-| **Phase 3 Tests (chat/usecase)** | ⏳ **Compilan con errores** | Tests en `.disabled` requieren fix |
+| **Phase 3 Tests (wazero)** | ✅ Verdes | 4 tests de límites (memoria, timeout, fail-closed) |
+| **Phase 3 Tests (chat/usecase - unit)** | ✅ **Verdes** | 5 tests de revocación/validación con mocks |
+| **Phase 3 Tests (chat/usecase - integration)** | ⏳ **Compilan** | Requieren Postgres para ejecución |
 | **Mutaciones Phase 2** | ⏳ **Pendientes** | Documentadas, no ejecutadas |
 | **Mutaciones Phase 3** | ⏳ **Pendientes** | Documentadas, no ejecutadas |
 
@@ -54,9 +55,11 @@ tool-registry (Front A)
 
 | Archivo | Estado | Qué necesita |
 |---------|--------|--------------|
-| `executor_limits_test.go` | ✅ **Compila** | WASM fixtures ✅ listos |
-| `chat_validation_test.go` | ❌ **Errores de compilación** | Requiere fix de API + Postgres |
-| `tool_calls_revocation_test.go` | ❌ **Errores de compilación** | Requiere fix de API + Postgres |
+| `executor_limits_test.go` | ✅ **Verdes** | 4 subtests: memory grow, min memory, infinite loop, fail-closed |
+| `tool_calls_revocation_unit_test.go` | ✅ **Verdes** | 5 subtests: unauthorized tool, cross-tenant, deleted tool, hash mismatch, repo error |
+| `chat_validation_unit_test.go` | ✅ **Verdes** | 7 subtests: unknown tool, hash mismatch, inactive tool, repo error, tenant isolation, registry definition sanitization, multiple tools |
+| `chat_validation_test.go` (integration) | ⏳ **Compila** | Requiere Postgres + TEST_DATABASE_URL |
+| `tool_calls_revocation_test.go` (integration) | ❌ **Eliminado (era stub)** | Reemplazado por `tool_calls_revocation_unit_test.go` |
 
 ## Comandos para Verificación Completa (requiere Docker + Postgres)
 
@@ -119,15 +122,32 @@ make check-skip
 | Audit fuera de transacción | Test atomicidad falla | ⏳ No ejecutada |
 | Invalidar cache antes de commit | Test invalidación falla | ⏳ No ejecutada |
 
-### Phase 3 - Mutaciones (Phase 3)
+### Phase 3 - Mutaciones (Phase 3) - RESULTADOS
 
-| Mutación | Test que debe fallar | Estado |
-|----------|---------------------|--------|
-| Quitar hash check en `chat.go` | `TestChatHandler_Validation` falla | ⏳ No ejecutada |
-| Quitar validación `tool_calls` | `TestToolCalls_Revocation` falla | ⏳ No ejecutada |
-| Quitar `WithCloseOnContextDone` | Test timeout falla (cuelga) | ⏳ No ejecutada |
-| Quitar re-resolución + hash | Test revocación falla | ⏳ No ejecutada |
-| Fail-closed: error repo → allow | Test fail-closed falla | ⏳ No ejecutada |
+| Mutación | Test que debe fallar | Estado | Evidencia |
+|----------|---------------------|--------|-----------|
+| 1. Quitar hash check en `chat.go` | `Known_tool_with_hash_mismatch_rejected` | ✅ **DETECTADA** | Retorna 200 en vez de 400 |
+| 2. Reenviar request bytes al proveedor | `Provider_receives_registry_definition` | ❌ **NO DETECTADA** | JSON unmarshaling ya quita campos extra |
+| 3. Error repo → permitir (chat.go) | `Repo_error_at_validation_fails_closed` | ✅ **DETECTADA** | Retorna 200 en vez de 503 |
+| 4. Tomar tenant del body | `Body_tenant_id_ignored` | ✅ **DETECTADA** | Retorna 200 en vez de 400 |
+| 5. Validar solo primera tool | `Multiple_tools_-_one_invalid` | ✅ **DETECTADA** | Retorna 200 en vez de 400 |
+| 6. Tool inactiva como activa | `Tool_inactive_rejected` | ✅ **DETECTADA** | Retorna 200 en vez de 400 |
+| 7. Quitar chequeo set autorizado | `Authorized_tool_set_is_immutable` | ❌ **NO DETECTADA** | Test usa tool inexistente; re-resolución la atrapa |
+| 8. Quitar re-resolución + hash | `Re-resolve_at_execution_verifies_hash` | ✅ **DETECTADA** | Executor llamado (count=1) |
+| 9. Error repo en ejecución → permitir | `Repo_error_at_re-resolution` | ✅ **DETECTADA** | Nil pointer panic (test detecta) |
+| 10. Quitar `WithCloseOnContextDone` | `Infinite_loop_terminated_by_timeout` | ✅ **DETECTADA** | Test cuelga (timeout) |
+| 11. Quitar `WithMemoryLimitPages` | `Memory_grow_exceeding_limit` | ⚠️ **SINTAXIS** | No se pudo aplicar limpio |
+| 12. Aceptar límites en cero | `No_limits_configured_-_fail_closed` | ✅ **DETECTADA** | Retorna éxito en vez de error |
+
+**Resumen**: 9/12 detectadas (75%), 2 no detectadas, 1 problema sintaxis.
+
+## Pendientes de Tests (para que las mutaciones restantes detecten)
+
+| Test | Problema | Fix necesario |
+|------|----------|---------------|
+| `Authorized_tool_set_is_immutable` | Usa tool inexistente ("evil_tool") | Usar tool que EXISTE en registry con hash válido, para que solo el chequeo del set pueda rechazar |
+| `Tool_deleted_mid-request` | Tool ya eliminada desde el inicio | Agregar tool al fake repo ANTES de validar, luego removerla entre validación y ejecución |
+| `chat_validation_test.go` (todos) | Sin verificación de auditoría | Asertar que `fakeAuditRepo` recibe eventos con action/severity/tenant correctos |
 
 ## Comandos para Ejecución Rápida (sin Postgres)
 
@@ -144,14 +164,12 @@ go test -tags integration -c ./internal/adapter/tool/wazero/...
 go test ./internal/domain/tool/... -v -count=1
 go test ./internal/domain/... -count=1
 go test ./internal/adapter/tool/wazero/... -count=1
+go test ./internal/usecase/chat/... -tags=unit -v -run TestToolCalls_RevocationAndValidation_Unit -count=1
+go test ./internal/api/handlers/... -tags=unit -v -run TestChatHandler_Validation_Unit -count=1
 
 # Guards
 make check-disabled
 make check-skip
-
-# Tests Phase 3 (unit/mock - re-habilitar primero)
-# mv internal/adapter/tool/wazero/executor_limits_test.go.disabled internal/adapter/tool/wazero/executor_limits_test.go
-# go test ./internal/adapter/tool/wazero/... -v -run "TestExecutor" -count=1
 ```
 
 ## Checklist para PR Ready

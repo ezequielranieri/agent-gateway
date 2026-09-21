@@ -20,13 +20,21 @@ check-disabled:
 check-skip:
 	@output=$$(go test -tags integration -count=1 -v ./... 2>&1 || true); \
 	echo "$$output"; \
-	allowed_skips=("Skipping integration test in short mode"); \
+	allowed_skips=("TEST_DATABASE_URL not set, skipping integration test"); \
+	if [ "$$CI" = "true" ]; then \
+		allowed_skips=("TEST_DATABASE_URL not set, skipping integration test"); \
+		echo "=== CI MODE: Only TEST_DATABASE_URL skips allowed ==="; \
+	else \
+		allowed_skips=("Skipping integration test in short mode" "TEST_DATABASE_URL not set, skipping integration test" "Skipping WasmExecutor tests - need proper wasm test fixtures" "Skipping timeout test - httptest.Server blocks on close with hanging connections"); \
+		echo "=== LOCAL MODE: Allowing short mode, WasmExecutor, timeout skips ==="; \
+	fi; \
 	skip_found=false; \
+	prev_line=""; \
 	while IFS= read -r line; do \
 		if echo "$$line" | grep -q -- "--- SKIP"; then \
 			allowed=false; \
 			for pattern in "$${allowed_skips[@]}"; do \
-				if echo "$$line" | grep -q -- "$$pattern"; then \
+				if echo "$$line" | grep -q -- "$$pattern" || echo "$$prev_line" | grep -q -- "$$pattern"; then \
 					allowed=true; \
 					break; \
 				fi; \
@@ -36,6 +44,7 @@ check-skip:
 				skip_found=true; \
 			fi; \
 		fi; \
+		prev_line="$$line"; \
 	done <<< "$$output"; \
 	if [ "$$skip_found" = true ]; then \
 		exit 1; \

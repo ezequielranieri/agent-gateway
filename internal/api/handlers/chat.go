@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -225,6 +226,10 @@ func (h *ChatHandlers) validateTools(ctx context.Context, tenantID domain.UUID, 
 		// Lookup tool in registry by (tenant_id, name)
 		def, err := h.toolRepo.GetByName(ctx, tenantID, fn.Name)
 		if err != nil {
+			if errors.Is(err, tool.ErrToolRepository) {
+				h.logger.Error().Err(err).Str("tool", fn.Name).Str("tenant", tenantID.String()).Msg("Tool repository error")
+				return nil, err // Return repo error directly (maps to 503)
+			}
 			h.logger.Warn().Err(err).Str("tool", fn.Name).Str("tenant", tenantID.String()).Msg("Tool not found in registry")
 			return nil, tool.ErrToolNotFound
 		}
@@ -342,6 +347,8 @@ func (h *ChatHandlers) mapError(err error) int {
 		return http.StatusBadRequest
 	case err == tool.ErrToolDefinitionMismatch:
 		return http.StatusBadRequest
+	case err == tool.ErrToolRepository:
+		return http.StatusServiceUnavailable
 	case err == model.ErrProviderRateLimited:
 		return http.StatusTooManyRequests
 	case err == model.ErrProviderTimeout:
