@@ -136,10 +136,10 @@ make check-skip
 | 8. Quitar re-resolución + hash | `Re-resolve_at_execution_verifies_hash` | ✅ **DETECTADA** | Executor llamado (count=1) |
 | 9. Error repo en ejecución → permitir | `Repo_error_at_re-resolution` | ✅ **DETECTADA** | Nil pointer panic (test detecta) |
 | 10. Quitar `WithCloseOnContextDone` | `Infinite_loop_terminated_by_timeout` | ✅ **DETECTADA** | Test cuelga (timeout) |
-| 11. Quitar `WithMemoryLimitPages` | `Memory_grow_exceeding_limit` | ⚠️ **SINTAXIS** | No se pudo aplicar limpio |
+| 11. Quitar `WithMemoryLimitPages` | `Memory_grow_exceeding_limit` | ✅ **DETECTADA** | Test pasa sin error (sin límite de memoria) |
 | 12. Aceptar límites en cero | `No_limits_configured_-_fail_closed` | ✅ **DETECTADA** | Retorna éxito en vez de error |
 
-**Resumen**: 9/12 detectadas (75%), 2 no detectadas, 1 problema sintaxis.
+**Resumen**: 10/12 detectadas (83%), 2 no detectadas (#2 y #7).
 
 ## Pendientes de Tests (para que las mutaciones restantes detecten)
 
