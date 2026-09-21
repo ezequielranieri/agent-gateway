@@ -214,6 +214,38 @@ func (w *WasmExecutor) getExecutionTimeout(tc *tool.ToolModuleConfig, validatedT
 	return timeoutMs
 }
 
+// getMemoryBucketFromValidated returns the appropriate memory bucket
+// Priority: validated tool (from registry) -> tool config -> config default
+func (w *WasmExecutor) getMemoryBucketFromValidated(validatedTool *ValidatedTool, tc *tool.ToolModuleConfig) uint32 {
+	var memPages uint32
+
+	if validatedTool != nil {
+		// Registry limits take precedence (memory_pages from registry)
+		memPages = validatedTool.MemoryPages
+	}
+
+	if memPages == 0 && tc.Limits.MemoryPages > 0 {
+		memPages = tc.Limits.MemoryPages
+	}
+
+	if memPages == 0 && w.config.DefaultMemoryPages > 0 {
+		memPages = w.config.DefaultMemoryPages
+	}
+
+	if memPages == 0 {
+		memPages = 512
+	}
+
+	// Round up to next bucket
+	for _, bucket := range MemoryBuckets {
+		if memPages <= bucket {
+			return bucket
+		}
+	}
+	// If exceeds max bucket, use max bucket (will fail at instantiation if min_memory > bucket)
+	return MemoryBuckets[len(MemoryBuckets)-1]
+}
+
 // Name returns the executor identifier.
 func (w *WasmExecutor) Name() string {
 	return "wazero"
@@ -372,7 +404,12 @@ func (w *WasmExecutor) Execute(ctx context.Context, call tool.ToolCall) (tool.To
 	}
 
 // 2. Resolve execution limits (fail-closed if no limits)
-	timeoutMs := w.getExecutionTimeout(tc, nil)
+	// Retrieve validated tool from context (registry limits take precedence)
+	validatedTool := getValidatedToolFromContext(ctx, call.Name)
+	timeoutMs := w.getExecutionTimeout(tc, validatedTool)
+
+	// Resolve memory bucket from registry limits
+	bucket = w.getMemoryBucketFromValidated(validatedTool, tc)
 
 	// FAIL-CLOSED: If no limits configured anywhere, reject immediately
 	if timeoutMs <= 0 {
