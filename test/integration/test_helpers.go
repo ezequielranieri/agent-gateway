@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx/v5" driver for wait.ForSQL
 	"github.com/moby/moby/api/types/network"
+	"github.com/pressly/goose/v3"
+	_ "github.com/pressly/goose/v3/cmd/goose" // register goose
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -34,6 +36,7 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/auth"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/chat"
+	"github.com/ezequielranieri/agent-gateway/internal/usecase/hitl"
 	"github.com/ezequielranieri/agent-gateway/internal/usecase/hitl"
 )
 
@@ -104,6 +107,17 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	// Apply migrations matching production schema
 	err = ApplyMigrations(ctx, dbPool)
 	require.NoError(t, err)
+
+	// Run goose migrations to create goose_db_version table
+	gooseProvider, err := goose.NewProvider(
+		goose.WithDialect("postgres"),
+		goose.WithDir("migrations"),
+	)
+	require.NoError(t, err)
+	defer gooseProvider.Close()
+
+	err = gooseProvider.Up(ctx, pgDSN)
+	require.NoError(t, err, "goose migrations failed")
 
 	// Verify test role is NOSUPERUSER NOBYPASSRLS
 	checkTestRole(t, dbPool)
