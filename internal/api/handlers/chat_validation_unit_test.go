@@ -240,8 +240,9 @@ func (f *fakeToolRepository) InitFromConfig(ctx context.Context, tenantID domain
 // mockProviderWithCapture captures the request sent to the provider
 type mockProviderWithCapture struct {
 	*providermock.Provider
-	lastReq model.ChatRequest
-	mu      sync.Mutex
+	lastReq       model.ChatRequest
+	lastReqRaw    []byte // Raw JSON bytes sent to provider
+	mu            sync.Mutex
 }
 
 func newMockProviderWithCapture(opts ...providermock.Option) *mockProviderWithCapture {
@@ -254,8 +255,11 @@ func newMockProviderWithCapture(opts ...providermock.Option) *mockProviderWithCa
 		providermock.WithModels([]string{"test-model"}),
 		providermock.WithEnabled(true),
 		providermock.WithResponseFunc(func(req model.ChatRequest) (model.Completion, error) {
+			// Capture raw JSON bytes that would be sent to provider
+			raw, _ := json.Marshal(req)
 			mp.mu.Lock()
 			mp.lastReq = req
+			mp.lastReqRaw = raw
 			mp.mu.Unlock()
 			return baseProvider.Complete(context.Background(), req)
 		}),
@@ -267,6 +271,12 @@ func (m *mockProviderWithCapture) getLastRequest() model.ChatRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.lastReq
+}
+
+func (m *mockProviderWithCapture) getLastRequestRaw() []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastReqRaw
 }
 
 func TestChatHandler_Validation_Unit(t *testing.T) {
@@ -654,30 +664,36 @@ t.Run("Provider receives registry definition, not request bytes - parameters can
 		assert.NotEqual(t, http.StatusBadRequest, w.Code)
 
 		// Verify provider received EXACTLY the registry definition, not request bytes
-		lastReq := mockProvider.getLastRequest()
-		require.Len(t, lastReq.Tools, 1)
-		providerTool := lastReq.Tools[0]
-		assert.Equal(t, "function", providerTool.Type)
-		assert.Equal(t, toolName, providerTool.Function.Name)
-		assert.Equal(t, description, providerTool.Function.Description)
+		// Compare raw JSON bytes sent to provider
+		lastReqRaw := mockProvider.getLastRequestRaw()
 		
-		// Parameters should match registry EXACTLY (canonicalized), not the request's formatting
-		// The registry parameters have specific key order: properties -> path, then required
-		params := providerTool.Function.Parameters
-		require.NotNil(t, params)
+		// The provider should receive the registry definition (canonicalized), not the request bytes
+		// Build expected provider request with registry definition (including user from JWT)
+		var registryParams map[string]any
+		json.Unmarshal(parameters, &registryParams)
 		
-		// Registry parameters don't have extra_field
-		_, hasExtra := params["extra_field"]
-		assert.False(t, hasExtra, "Extra field from request should not be in provider payload")
-		_, hasAnotherExtra := params["another_extra"]
-		assert.False(t, hasAnotherExtra, "Extra field from request should not be in provider payload")
+		expectedProviderReq := model.ChatRequest{
+			Model: "test-model",
+			Messages: []model.Message{
+				{Role: "user", Content: "read a file"},
+			},
+			Tools: []model.Tool{
+				{
+					Type: "function",
+					Function: model.FunctionDef{
+						Name:        toolName,
+						Description: description,
+						Parameters:  registryParams, // Registry version (canonicalized)
+					},
+				},
+			},
+			User: userID.String(), // User from JWT
+		}
+		expectedRaw, _ := json.Marshal(expectedProviderReq)
 		
-		// Parameters should be the canonical registry version (same as what's stored)
-		// Verify key order and structure match registry
-		paramsBytes, _ := json.Marshal(params)
-		// The registry version should be canonical (sorted keys)
-		assert.Contains(t, string(paramsBytes), `"properties"`)
-		assert.Contains(t, string(paramsBytes), `"required"`)
+		// Exact byte comparison - this is the key test for mutation #2
+		assert.Equal(t, string(expectedRaw), string(lastReqRaw), 
+			"Provider should receive exact registry definition bytes, not request bytes")
 	})
 
 	t.Run("Multiple tools - one invalid rejects entire request", func(t *testing.T) {

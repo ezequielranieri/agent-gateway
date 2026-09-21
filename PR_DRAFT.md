@@ -127,27 +127,38 @@ make check-skip
 | Mutación | Test que debe fallar | Estado | Evidencia |
 |----------|---------------------|--------|-----------|
 | 1. Quitar hash check en `chat.go` | `Known_tool_with_hash_mismatch_rejected` | ✅ **DETECTADA** | Retorna 200 en vez de 400 |
-| 2. Reenviar request bytes al proveedor | `Provider_receives_registry_definition` | ❌ **NO DETECTADA** | JSON unmarshaling ya quita campos extra |
+| 2. Reenviar request bytes al proveedor | `Provider_receives_registry_definition` | ❌ **NO DETECTADA** | JSON equivalente bajo JCS produce mismos bytes canónicos |
 | 3. Error repo → permitir (chat.go) | `Repo_error_at_validation_fails_closed` | ✅ **DETECTADA** | Retorna 200 en vez de 503 |
 | 4. Tomar tenant del body | `Body_tenant_id_ignored` | ✅ **DETECTADA** | Retorna 200 en vez de 400 |
 | 5. Validar solo primera tool | `Multiple_tools_-_one_invalid` | ✅ **DETECTADA** | Retorna 200 en vez de 400 |
 | 6. Tool inactiva como activa | `Tool_inactive_rejected` | ✅ **DETECTADA** | Retorna 200 en vez de 400 |
-| 7. Quitar chequeo set autorizado | `Authorized_tool_set_is_immutable` | ❌ **NO DETECTADA** | Test usa tool inexistente; re-resolución la atrapa |
+| 7. Quitar chequeo set autorizado | `Authorized_tool_set_is_immutable` | ✅ **DETECTADA** | GetByName llamado (count=1 vs 0) |
 | 8. Quitar re-resolución + hash | `Re-resolve_at_execution_verifies_hash` | ✅ **DETECTADA** | Executor llamado (count=1) |
-| 9. Error repo en ejecución → permitir | `Repo_error_at_re-resolution` | ✅ **DETECTADA** | Nil pointer panic (test detecta) |
+| 9. Error repo en ejecución → permitir | `Repo_error_at_re-resolution` | ❌ **NO DETECTADA** | Nil pointer panic (test detecta, pero no por aserción) |
 | 10. Quitar `WithCloseOnContextDone` | `Infinite_loop_terminated_by_timeout` | ✅ **DETECTADA** | Test cuelga (timeout) |
 | 11. Quitar `WithMemoryLimitPages` | `Memory_grow_exceeding_limit` | ✅ **DETECTADA** | Test pasa sin error (sin límite de memoria) |
 | 12. Aceptar límites en cero | `No_limits_configured_-_fail_closed` | ✅ **DETECTADA** | Retorna éxito en vez de error |
+| 13. Hash con `json.Marshal` en vez de `ComputeHash` | JCS canonicalization test | ❌ **NO DETECTADA** | Test no escrito aún |
 
-**Resumen**: 10/12 detectadas (83%), 2 no detectadas (#2 y #7).
+**Resumen**: 10/13 detectadas (77%), 3 no detectadas (#2, #9, #13).
 
 ## Pendientes de Tests (para que las mutaciones restantes detecten)
 
 | Test | Problema | Fix necesario |
 |------|----------|---------------|
-| `Authorized_tool_set_is_immutable` | Usa tool inexistente ("evil_tool") | Usar tool que EXISTE en registry con hash válido, para que solo el chequeo del set pueda rechazar |
-| `Tool_deleted_mid-request` | Tool ya eliminada desde el inicio | Agregar tool al fake repo ANTES de validar, luego removerla entre validación y ejecución |
-| `chat_validation_test.go` (todos) | Sin verificación de auditoría | Asertar que `fakeAuditRepo` recibe eventos con action/severity/tenant correctos |
+| `Authorized_tool_set_is_immutable` | ✅ **ARREGLADO** - test usa tool existente en registry | GetByName spy agregado, mutación #7 detectada |
+| `Tool_deleted_mid-request` | ❌ Pendiente | Agregar tool al fake repo ANTES de validar, remover ENTRE validación y ejecución |
+| `chat_validation_test.go` (todos) | ❌ Pendiente | Asertar que `fakeAuditRepo` recibe eventos con action/severity/tenant correctos |
+| JCS canonicalization test | ❌ Pendiente | Agregar mutación #13: hash con `json.Marshal` en vez de `ComputeHash` |
+
+## Próximos pasos para completar mutaciones
+
+| Acción | Detalle |
+|--------|---------|
+| Fix test #9 | Mutación debe fallar por "executor no debe ser llamado", no por nil pointer |
+| Fix test #13 | Agregar test JCS canonicalization + mutación hash con `json.Marshal` |
+| Auditoria en `chat_validation_test.go` | Asertar `fakeAuditRepo` recibe eventos con action/severity/tenant correctos en cada rechazo |
+| Mid-request deletion | Agregar tool ANTES de validar, remover ENTRE validación y ejecución |
 
 ## Comandos para Ejecución Rápida (sin Postgres)
 
