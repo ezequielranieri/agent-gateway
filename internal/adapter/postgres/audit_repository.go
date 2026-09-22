@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -405,7 +406,7 @@ func (r *AuditRepository) VerifyChain(ctx context.Context, tenantID domain.UUID,
 		}
 		defer rows.Close()
 
-		var prevHash string
+		var prevHash []byte
 		first := true
 
 		for rows.Next() {
@@ -423,18 +424,18 @@ func (r *AuditRepository) VerifyChain(ctx context.Context, tenantID domain.UUID,
 			event := convertSQLCAuditEvent(i)
 
 			if first {
-				// Genesis event should have prev_hash = 64 zeros
-				expectedPrev := "0000000000000000000000000000000000000000000000000000000000000000"
-				if string(i.PrevHash) != expectedPrev {
+				// Genesis event should have prev_hash = 64 zero bytes
+				expectedPrev := make([]byte, 64)
+				if !bytes.Equal(i.PrevHash, expectedPrev) {
 					result.Valid = false
 					result.BrokenSeq = event.Seq
-					result.Error = fmt.Errorf("genesis event has invalid prev_hash: got %s", string(i.PrevHash))
+					result.Error = fmt.Errorf("genesis event has invalid prev_hash: got %x", i.PrevHash)
 					return nil
 				}
 				first = false
 			} else {
 				// Verify prev_hash matches previous event's chain_hash
-				if string(i.PrevHash) != prevHash {
+				if !bytes.Equal(i.PrevHash, prevHash) {
 					result.Valid = false
 					result.BrokenSeq = event.Seq
 					result.Error = fmt.Errorf("broken chain at seq %d: prev_hash mismatch", event.Seq)
@@ -450,7 +451,7 @@ func (r *AuditRepository) VerifyChain(ctx context.Context, tenantID domain.UUID,
 				return nil
 			}
 
-			prevHash = event.ChainHash
+			prevHash = []byte(event.ChainHash)
 		}
 
 		if err := rows.Err(); err != nil {
