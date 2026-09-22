@@ -333,7 +333,9 @@ func (r *AuditRepository) AppendWithTx(ctx context.Context, tx pgx.Tx, event *do
 		Hash:       hashBytes[:],
 	}
 
-	created, err := r.queries.CreateAuditEvent(ctx, createParams)
+	// Use transaction-bound queries so RLS GUC is active on this connection
+	q := r.queries.WithTx(tx)
+	created, err := q.CreateAuditEvent(ctx, createParams)
 	if err != nil {
 		return fmt.Errorf("failed to insert audit event: %w", err)
 	}

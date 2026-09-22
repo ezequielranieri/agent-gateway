@@ -255,11 +255,13 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 // ensureTestTenant creates the test tenant in the database if it doesn't exist.
 // Required because tool_definitions has FK to tenants table.
 func ensureTestTenant(ctx context.Context, pool *pgxpool.Pool, tenantID domain.UUID) error {
-	_, err := pool.Exec(ctx, `
-		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Test Tenant', 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, uuid.UUID(tenantID))
-	return err
+	return WithTenantTx(ctx, pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Test Tenant', 'active')
+			ON CONFLICT (id) DO NOTHING
+		`, uuid.UUID(tenantID))
+		return err
+	})
 }
 
 func getTestDSN(t *testing.T) string {
@@ -274,8 +276,8 @@ func getTestDSN(t *testing.T) string {
 }
 
 func createTestTool(ctx context.Context, pool *pgxpool.Pool, tenantID domain.UUID, name, description string, parameters, grants json.RawMessage, timeoutMs uint64, memoryPages uint32, hash string) error {
-	return WithTenant(ctx, pool, tenantID, func(ctx context.Context) error {
-		_, err := pool.Exec(ctx, `
+	return WithTenantTx(ctx, pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
 			INSERT INTO public.tool_definitions (tenant_id, name, description, input_schema, grants, execution_timeout_ms, memory_pages, hash, is_active)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
 			ON CONFLICT (tenant_id, name) WHERE is_active = true DO UPDATE SET
