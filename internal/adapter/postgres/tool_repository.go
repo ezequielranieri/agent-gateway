@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sync"
 	"time"
@@ -87,6 +89,9 @@ func (r *ToolRepository) GetByName(ctx context.Context, tenantID domain.UUID, na
 			Name:     name,
 		})
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return tool.ErrToolNotFound
+			}
 			return err
 		}
 		def = r.convertSQLCToolDefinition(result)
