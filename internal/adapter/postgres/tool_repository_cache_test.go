@@ -260,11 +260,13 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 // ensureTestTenant creates the test tenant in the database if it doesn't exist.
 // Required because tool_definitions has FK to tenants table.
 // The tenants table does not have RLS, so we can insert directly without WithTenantTx.
+// The name includes the tenant ID to avoid duplicate name conflicts.
 func ensureTestTenant(ctx context.Context, pool *pgxpool.Pool, tenantID domain.UUID) error {
+	name := "Test Tenant " + tenantID.String()
 	_, err := pool.Exec(ctx, `
-		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Test Tenant', 'active')
+		INSERT INTO public.tenants (id, name, status) VALUES ($1, $2, 'active')
 		ON CONFLICT (id) DO NOTHING
-	`, uuid.UUID(tenantID))
+	`, uuid.UUID(tenantID), name)
 	return err
 }
 
