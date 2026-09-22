@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -107,14 +109,10 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	require.NoError(t, err)
 
 	// Run goose migrations to create goose_db_version table
-	gooseProvider, err := goose.NewProvider(
-		goose.WithDialect("postgres"),
-		goose.WithDir("migrations"),
-	)
+	migrationsPath, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
 	require.NoError(t, err)
-	defer gooseProvider.Close()
 
-	err = gooseProvider.Up(ctx, pgDSN)
+	err = goose.UpContext(ctx, pgDSN, migrationsPath)
 	require.NoError(t, err, "goose migrations failed")
 
 	// Verify test role is NOSUPERUSER NOBYPASSRLS
