@@ -82,10 +82,14 @@ func findRepoRoot() (string, error) {
 		return "", err
 	}
 
-	// Walk up the directory tree looking for migrations directory
+	// Walk up the directory tree looking for migrations directory OR go.mod
 	for {
 		migrationsPath := filepath.Join(dir, "migrations")
 		if _, err := os.Stat(migrationsPath); err == nil {
+			return dir, nil
+		}
+		goModPath := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(goModPath); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
@@ -94,7 +98,7 @@ func findRepoRoot() (string, error) {
 		}
 		dir = parent
 	}
-	return "", fmt.Errorf("could not find migrations directory")
+	return "", fmt.Errorf("could not find repository root (no migrations dir or go.mod)")
 }
 
 func TestPostgresContainerSetup(t *testing.T) {
