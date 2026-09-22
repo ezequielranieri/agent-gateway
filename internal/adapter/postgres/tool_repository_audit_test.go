@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/domain/tool"
 )
@@ -351,9 +353,9 @@ func TestToolRepository_AuditAtomicity(t *testing.T) {
 		assert.Equal(t, countBefore, countAfter)
 	})
 
-	t.Run("Concurrent hash chain integrity", func(t *testing.T) {
-		// Test that concurrent tool operations maintain audit chain integrity
-		// This is a lightweight check - full verification is in VerifyChain test
+t.Run("Concurrent hash chain integrity", func(t *testing.T) {
+		// Test that sequential tool operations maintain audit chain integrity
+		// All updates run in a single transaction to ensure advisory lock serialization
 
 		toolName := "concurrent_chain_tool"
 		description := "Concurrent chain test"
@@ -373,24 +375,41 @@ func TestToolRepository_AuditAtomicity(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Update multiple times rapidly
-		for i := 0; i < 5; i++ {
-			newDesc := description + " v" + string(rune('1'+i))
-			newHash := tool.ComputeHash(toolName, newDesc, parameters)
+		// Run all updates in a single transaction to ensure advisory lock serialization
+		err = WithTenantTx(ctx, dbPool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+			for i := 0; i < 5; i++ {
+				newDesc := description + " v" + string(rune('1'+i))
+				newHash := tool.ComputeHash(toolName, newDesc, parameters)
 
-			_, err := repo.UpdateToolDefinition(ctx, tenantID, &tool.ToolDefinition{
-				TenantID:             tenantID,
-				Name:                 toolName,
-				Description:          newDesc,
-				InputSchema:          parameters,
-				Grants:               grants,
-				ExecutionTimeoutMs:   timeoutMs,
-				MemoryPages:          memoryPages,
-				Hash:                 newHash,
-				IsActive:             true,
-			})
-			require.NoError(t, err)
-		}
+				_, err := repo.UpdateToolDefinitionTx(ctx, tx, tenantID, &tool.ToolDefinition{
+					TenantID:             tenantID,
+					Name:                 toolName,
+					Description:          newDesc,
+					InputSchema:          parameters,
+					Grants:               grants,
+					ExecutionTimeoutMs:   timeoutMs,
+					MemoryPages:          memoryPages,
+					Hash:                 newHash,
+					IsActive:             true,
+				})
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Verify chain integrity
+		result, err := auditRepo.VerifyChain(ctx, tenantID, 1, 100)
+		require.NoError(t, err)
+		assert.True(t, result.Valid)
+	})
+}
+			}
+			return nil
+		})
+		require.NoError(t, err)
 
 		// Verify chain integrity
 		result, err := auditRepo.VerifyChain(ctx, tenantID, 1, 100)

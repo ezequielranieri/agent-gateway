@@ -110,6 +110,26 @@ func (r *ToolRepository) GetByName(ctx context.Context, tenantID domain.UUID, na
 	return def, nil
 }
 
+// GetByNameTx returns tool definition by name for a tenant using an existing transaction.
+// The transaction must already have the tenant GUC set.
+// Does NOT use cache (caller manages caching if needed).
+func (r *ToolRepository) GetByNameTx(ctx context.Context, tx pgx.Tx, tenantID domain.UUID, name string) (*tool.ToolDefinition, error) {
+	// Use transaction-bound queries so RLS GUC is active on this connection
+	q := r.queries.WithTx(tx)
+
+	result, err := q.GetToolDefinitionByName(ctx, postgressqlc.GetToolDefinitionByNameParams{
+		TenantID: uuid.UUID(tenantID),
+		Name:     name,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, tool.ErrToolNotFound
+		}
+		return nil, err
+	}
+	return r.convertSQLCToolDefinition(result), nil
+}
+
 // CreateToolDefinition inserts a new tool definition for a tenant.
 // Invalidates cache and emits audit event on success.
 func (r *ToolRepository) CreateToolDefinition(ctx context.Context, tenantID domain.UUID, def *tool.ToolDefinition) error {
@@ -257,6 +277,89 @@ func (r *ToolRepository) UpdateToolDefinition(ctx context.Context, tenantID doma
 
 	// Invalidate cache AFTER successful commit
 	r.invalidateCache(tenantID, def.Name)
+
+	return hashChanged, nil
+}
+
+// UpdateToolDefinitionTx updates a tool definition within an existing transaction.
+// The caller is responsible for managing the transaction (commit/rollback).
+// The transaction must already have the tenant GUC set.
+func (r *ToolRepository) UpdateToolDefinitionTx(ctx context.Context, tx pgx.Tx, tenantID domain.UUID, def *tool.ToolDefinition) (hashChanged bool, err error) {
+	// Get existing tool to compare (uses same transaction for RLS)
+	existing, err := r.GetByNameTx(ctx, tx, tenantID, def.Name)
+	if err != nil {
+		return false, err
+	}
+
+	// Determine what changed
+	oldHash := existing.Hash
+	newHash := def.Hash
+	if newHash == "" {
+		newHash = tool.ComputeHash(def.Name, def.Description, def.InputSchema)
+	}
+	hashChanged = oldHash != newHash
+
+	// Build changed fields list
+	var changedFields []string
+	if existing.Description != def.Description {
+		changedFields = append(changedFields, "description")
+	}
+	if !jsonEqual(existing.InputSchema, def.InputSchema) {
+		changedFields = append(changedFields, "input_schema")
+	}
+	if !jsonEqual(existing.Grants, def.Grants) {
+		changedFields = append(changedFields, "grants")
+	}
+	if existing.ExecutionTimeoutMs != def.ExecutionTimeoutMs {
+		changedFields = append(changedFields, "execution_timeout_ms")
+	}
+	if existing.MemoryPages != def.MemoryPages {
+		changedFields = append(changedFields, "memory_pages")
+	}
+	if existing.IsActive != def.IsActive {
+		changedFields = append(changedFields, "is_active")
+	}
+
+	// Determine severity based on what changed
+	severity := domain.AuditSeverityWarn
+	if hashChanged {
+		severity = domain.AuditSeverityCritical
+	}
+
+	// Use transaction-bound queries so RLS GUC is active on this connection
+	q := r.queries.WithTx(tx)
+
+	// Update tool definition
+	params := postgressqlc.UpdateToolDefinitionParams{
+		TenantID:           uuid.UUID(tenantID),
+		Name:               def.Name,
+		Description:        def.Description,
+		InputSchema:        def.InputSchema,
+		Grants:             def.Grants,
+		ExecutionTimeoutMs: int64(def.ExecutionTimeoutMs),
+		MemoryPages:        int32(def.MemoryPages),
+		Hash:               newHash,
+		IsActive:           def.IsActive,
+	}
+
+	updated, err := q.UpdateToolDefinition(ctx, params)
+	if err != nil {
+		return false, err
+	}
+
+	// Update def with new values
+	def.ID = updated.ID
+	def.TenantID = domain.UUID(updated.TenantID)
+	def.Hash = updated.Hash
+	def.UpdatedAt = updated.UpdatedAt
+
+	// Emit audit event within the same transaction
+	if r.auditRepo != nil {
+		auditEvent := r.buildAuditEvent(tenantID, def, "UPDATE", &oldHash, &newHash, changedFields, severity)
+		if err := r.auditRepo.AppendWithTx(ctx, tx, auditEvent); err != nil {
+			return false, err
+		}
+	}
 
 	return hashChanged, nil
 }
