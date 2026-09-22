@@ -92,24 +92,13 @@ func computeChainInput(prevHash string, seq int64, tenantID domain.UUID, actorID
 }
 
 // Append adds an audit event with hash chaining.
-// Runs inside WithTenantTx (tenant-bound transaction) and delegates to AppendWithTx.
-// Uses advisory lock to serialize chain appends per tenant, eliminating retries.
-func (r *AuditRepository) Append(ctx context.Context, event *domain.AuditEvent) error {
-	return WithTenantTx(ctx, r.pool, event.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-		// Acquire advisory lock to serialize chain appends for this tenant
-		// This prevents concurrent writers from racing on the chain tail
-		// Use blocking variant with context deadline; lock released on tx end
-		classID := r.advisoryLockClassID()
-		objID := r.advisoryLockObjectID(event.TenantID)
-		// Acquire lock - blocks until available, respects context deadline
-		_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, classID, objID)
-		if err != nil {
-			return fmt.Errorf("failed to acquire advisory lock: %w", err)
-		}
-		// Lock is held until transaction commits or rolls back
-		return r.AppendWithTx(ctx, tx, event)
-	})
-}
+	// Runs inside WithTenantTx (tenant-bound transaction) and delegates to AppendWithTx.
+	// The advisory lock is acquired inside AppendWithTx.
+	func (r *AuditRepository) Append(ctx context.Context, event *domain.AuditEvent) error {
+		return WithTenantTx(ctx, r.pool, event.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+			return r.AppendWithTx(ctx, tx, event)
+		})
+	}
 
 // advisoryLockClassID returns a stable class ID for tool registry audit locks
 // This avoids collisions with other advisory locks in the application
