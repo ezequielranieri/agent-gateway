@@ -376,6 +376,15 @@ t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		// Debug: check initial audit event
+		initEvents, err := auditRepo.Query(ctx, AuditFilter{TenantID: chainTenantID, Limit: 10})
+		require.NoError(t, err)
+		t.Logf("After CREATE: %d events", len(initEvents))
+		for _, e := range initEvents {
+			t.Logf("  seq=%d action=%s prev_hash=%x chain_hash=%x",
+				e.Seq, e.Action, e.PrevHash[:8], e.ChainHash[:8])
+		}
+
 		// Run all updates in a single transaction to ensure advisory lock serialization
 		err = WithTenantTx(ctx, dbPool, chainTenantID, func(ctx context.Context, tx pgx.Tx) error {
 			for i := 0; i < 5; i++ {
@@ -401,9 +410,23 @@ t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		// Debug: inspect chain after all updates
+		debugEvents, err := auditRepo.Query(ctx, AuditFilter{TenantID: chainTenantID, Limit: 20})
+		require.NoError(t, err)
+		t.Logf("Chain events after updates (count=%d):", len(debugEvents))
+		for _, e := range debugEvents {
+			t.Logf("  seq=%d action=%s prev_hash=%x chain_hash=%x",
+				e.Seq, e.Action, e.PrevHash[:8], e.ChainHash[:8])
+		}
+
 		// Verify chain integrity for this tenant only (should have 6 events: 1 CREATE + 5 UPDATE)
 		result, err := auditRepo.VerifyChain(ctx, chainTenantID, 1, 6)
 		require.NoError(t, err)
-		assert.True(t, result.Valid, "chain should be valid: %v", result.Error)
+		if !result.Valid {
+			t.Logf("Chain verification failed: broken_seq=%d error=%v total_seen=%d",
+				result.BrokenSeq, result.Error, result.TotalSeen)
+		}
+		assert.True(t, result.Valid, "chain should be valid: broken_seq=%d error=%v total_seen=%d",
+			result.BrokenSeq, result.Error, result.TotalSeen)
 	})
 }
