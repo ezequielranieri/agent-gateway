@@ -424,8 +424,8 @@ func (r *AuditRepository) VerifyChain(ctx context.Context, tenantID domain.UUID,
 			event := convertSQLCAuditEvent(i)
 
 			if first {
-				// Genesis event should have prev_hash = 64 zero bytes
-				expectedPrev := make([]byte, 64)
+				// Genesis event should have prev_hash = 32 zero bytes (SHA-256 size)
+				expectedPrev := make([]byte, 32)
 				if !bytes.Equal(i.PrevHash, expectedPrev) {
 					result.Valid = false
 					result.BrokenSeq = event.Seq
