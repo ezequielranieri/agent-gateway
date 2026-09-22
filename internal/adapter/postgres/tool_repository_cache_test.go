@@ -73,6 +73,10 @@ func TestToolRepository_CacheBehavior(t *testing.T) {
 	t.Run("Cache tenant isolation", func(t *testing.T) {
 		// Create same tool name in different tenant
 		tenantID2 := domain.MustParseUUID("22222222-2222-2222-2222-222222222222")
+		
+		// Ensure test tenant exists (FK requirement for tool_definitions)
+		require.NoError(t, ensureTestTenant(ctx, dbPool, tenantID2))
+		
 		err := createTestTool(ctx, dbPool, tenantID2, toolName, "Different description", parameters, grants, timeoutMs, memoryPages, hash)
 		require.NoError(t, err)
 
