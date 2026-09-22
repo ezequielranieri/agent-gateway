@@ -399,9 +399,24 @@ t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		})
 		require.NoError(t, err)
 
+		// Debug: inspect the chain before verification
+		debugEvents, err := auditRepo.Query(ctx, AuditFilter{
+			TenantID: tenantID,
+			Limit:    20,
+		})
+		require.NoError(t, err)
+		t.Logf("Chain events before verification (count=%d):", len(debugEvents))
+		for _, e := range debugEvents {
+			t.Logf("  seq=%d action=%s prev_hash=%s chain_hash=%s",
+				e.Seq, e.Action, e.PrevHash[:16]+"...", e.ChainHash[:16]+"...")
+		}
+
 		// Verify chain integrity
 		result, err := auditRepo.VerifyChain(ctx, tenantID, 1, 100)
 		require.NoError(t, err)
+		if !result.Valid {
+			t.Logf("Chain verification failed: broken_seq=%d error=%v", result.BrokenSeq, result.Error)
+		}
 		assert.True(t, result.Valid)
 	})
 }
