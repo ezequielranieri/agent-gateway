@@ -354,15 +354,17 @@ func TestToolRepository_AuditAtomicity(t *testing.T) {
 
 t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		// Test that sequential tool operations maintain audit chain integrity
-		// All updates run in a single transaction to ensure advisory lock serialization
+		// Use a unique tenant to isolate from other test runs
+		chainTenantID := domain.NewUUID()
+		require.NoError(t, ensureTestTenant(ctx, dbPool, chainTenantID))
 
 		toolName := "concurrent_chain_tool"
 		description := "Concurrent chain test"
 		hash := tool.ComputeHash(toolName, description, parameters)
 
 		// Create tool
-		err := repo.CreateToolDefinition(ctx, tenantID, &tool.ToolDefinition{
-			TenantID:             tenantID,
+		err := repo.CreateToolDefinition(ctx, chainTenantID, &tool.ToolDefinition{
+			TenantID:             chainTenantID,
 			Name:                 toolName,
 			Description:          description,
 			InputSchema:          parameters,
@@ -375,13 +377,13 @@ t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		require.NoError(t, err)
 
 		// Run all updates in a single transaction to ensure advisory lock serialization
-		err = WithTenantTx(ctx, dbPool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		err = WithTenantTx(ctx, dbPool, chainTenantID, func(ctx context.Context, tx pgx.Tx) error {
 			for i := 0; i < 5; i++ {
 				newDesc := description + " v" + string(rune('1'+i))
 				newHash := tool.ComputeHash(toolName, newDesc, parameters)
 
-				_, err := repo.UpdateToolDefinitionTx(ctx, tx, tenantID, &tool.ToolDefinition{
-					TenantID:             tenantID,
+				_, err := repo.UpdateToolDefinitionTx(ctx, tx, chainTenantID, &tool.ToolDefinition{
+					TenantID:             chainTenantID,
 					Name:                 toolName,
 					Description:          newDesc,
 					InputSchema:          parameters,
@@ -399,24 +401,9 @@ t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Debug: inspect the chain before verification
-		debugEvents, err := auditRepo.Query(ctx, AuditFilter{
-			TenantID: tenantID,
-			Limit:    20,
-		})
+		// Verify chain integrity for this tenant only (should have 6 events: 1 CREATE + 5 UPDATE)
+		result, err := auditRepo.VerifyChain(ctx, chainTenantID, 1, 6)
 		require.NoError(t, err)
-		t.Logf("Chain events before verification (count=%d):", len(debugEvents))
-		for _, e := range debugEvents {
-			t.Logf("  seq=%d action=%s prev_hash=%s chain_hash=%s",
-				e.Seq, e.Action, e.PrevHash[:16]+"...", e.ChainHash[:16]+"...")
-		}
-
-		// Verify chain integrity
-		result, err := auditRepo.VerifyChain(ctx, tenantID, 1, 100)
-		require.NoError(t, err)
-		if !result.Valid {
-			t.Logf("Chain verification failed: broken_seq=%d error=%v", result.BrokenSeq, result.Error)
-		}
-		assert.True(t, result.Valid)
+		assert.True(t, result.Valid, "chain should be valid: %v", result.Error)
 	})
 }
