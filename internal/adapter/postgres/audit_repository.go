@@ -144,15 +144,15 @@ func findSubstring(s, substr string) bool {
 // GetLastEvent retrieves the last audit event for a tenant
 func (r *AuditRepository) GetLastEvent(ctx context.Context, tenantID domain.UUID) (*domain.AuditEvent, error) {
 	var event *domain.AuditEvent
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
 		// Get the event with the highest seq for this tenant
-		rows, err := r.pool.Query(ctx, `
+		rows, err := tx.Query(ctx, `
 			SELECT id, tenant_id, seq, actor_type, actor_id, action, entity_type, entity_id, payload, severity, prev_hash, hash, created_at
 			FROM public.audit_events
 			WHERE tenant_id = $1
 			ORDER BY seq DESC
 			LIMIT 1
-		`, tenantID)
+		`, uuid.UUID(tenantID))
 		if err != nil {
 			return err
 		}
@@ -180,7 +180,7 @@ func (r *AuditRepository) GetLastEvent(ctx context.Context, tenantID domain.UUID
 // Query retrieves audit events with filters
 func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*domain.AuditEvent, error) {
 	var events []*domain.AuditEvent
-	err := WithTenant(ctx, r.pool, filter.TenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, filter.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		// Build query dynamically based on filters
 		query := `
 			SELECT id, tenant_id, seq, actor_type, actor_id, action, entity_type, entity_id, payload, severity, prev_hash, hash, created_at
@@ -236,9 +236,10 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 		if filter.Offset > 0 {
 			query += fmt.Sprintf(" OFFSET $%d", argIdx)
 			args = append(args, filter.Offset)
+			argIdx++
 		}
 
-		rows, err := r.pool.Query(ctx, query, args...)
+		rows, err := tx.Query(ctx, query, args...)
 		if err != nil {
 			return err
 		}

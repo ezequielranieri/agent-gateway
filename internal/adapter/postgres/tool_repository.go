@@ -78,8 +78,11 @@ func (r *ToolRepository) GetByName(ctx context.Context, tenantID domain.UUID, na
 
 	// Cache miss - query database
 	var def *tool.ToolDefinition
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		result, err := r.queries.GetToolDefinitionByName(ctx, postgressqlc.GetToolDefinitionByNameParams{
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Use transaction-bound queries so RLS GUC is active on this connection
+		q := r.queries.WithTx(tx)
+
+		result, err := q.GetToolDefinitionByName(ctx, postgressqlc.GetToolDefinitionByNameParams{
 			TenantID: uuid.UUID(tenantID),
 			Name:     name,
 		})
