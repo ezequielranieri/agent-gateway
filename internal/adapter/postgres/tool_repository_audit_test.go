@@ -289,7 +289,7 @@ func TestToolRepository_AuditAtomicity(t *testing.T) {
 		var payload toolDefinitionAuditPayload
 		err = json.Unmarshal(event.Payload, &payload)
 		require.NoError(t, err)
-		assert.Equal(t, "CREATE", payload.Operation) // Upsert uses CREATE action
+		assert.Equal(t, "UPSERT", payload.Operation)
 		assert.Equal(t, toolName, payload.ToolName)
 		assert.Nil(t, payload.OldHash)
 		assert.Equal(t, hash, *payload.NewHash)
