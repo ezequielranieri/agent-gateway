@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -112,7 +113,12 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	migrationsPath, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
 	require.NoError(t, err)
 
-	err = goose.UpContext(ctx, pgDSN, migrationsPath)
+	// goose.UpContext requires *sql.DB, not DSN string
+	sqlDB, err := sql.Open("pgx", pgDSN)
+	require.NoError(t, err)
+	defer sqlDB.Close()
+
+	err = goose.UpContext(ctx, sqlDB, migrationsPath)
 	require.NoError(t, err, "goose migrations failed")
 
 	// Verify test role is NOSUPERUSER NOBYPASSRLS
