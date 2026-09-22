@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/domain/tool"
 )
