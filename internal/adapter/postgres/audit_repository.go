@@ -269,21 +269,15 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 	// The transaction must already have the tenant GUC set via WithTenantTx.
 	// Acquires advisory lock to serialize chain appends for this tenant.
 	func (r *AuditRepository) AppendWithTx(ctx context.Context, tx pgx.Tx, event *domain.AuditEvent) error {
-		// Acquire session-level advisory lock to serialize chain appends for this tenant.
-		// Use pg_advisory_lock (session-scoped) instead of pg_advisory_xact_lock (tx-scoped)
-		// so that the lock persists across transactions within the same session,
-		// preventing races between sequential updates from the same caller.
-		// The lock is explicitly released after the insert to avoid holding it across commits.
+		// Acquire transaction-scoped advisory lock to serialize chain appends for this tenant.
+		// Use pg_advisory_xact_lock (tx-scoped) which works correctly with connection pooling.
+		// The lock is automatically released when the transaction commits or rolls back.
 		classID := r.advisoryLockClassID()
 		objID := r.advisoryLockObjectID(event.TenantID)
-		_, err := tx.Exec(ctx, `SELECT pg_advisory_lock($1, $2)`, classID, objID)
+		_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, classID, objID)
 		if err != nil {
 			return fmt.Errorf("failed to acquire advisory lock: %w", err)
 		}
-		// Ensure lock is released even on error
-		defer func() {
-			_, _ = tx.Exec(ctx, `SELECT pg_advisory_unlock($1, $2)`, classID, objID)
-		}()
 
 	// Get the last event for this tenant to compute prev_hash and seq
 	lastEvent, err := r.getLastEventTx(ctx, tx, event.TenantID)
