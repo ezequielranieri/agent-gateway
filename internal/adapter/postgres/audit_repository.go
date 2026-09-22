@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -13,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	postgressqlc "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres/sqlc"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
@@ -352,8 +352,8 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 	// Update the event with generated values
 	event.ID = domain.UUID(created.ID)
 	event.Seq = created.Seq
-	event.PrevHash = string(created.PrevHash)
-	event.ChainHash = string(created.Hash)
+	event.PrevHash = hex.EncodeToString(created.PrevHash)
+	event.ChainHash = hex.EncodeToString(created.Hash)
 	event.Payload = canonicalPayload
 	event.CreatedAt = created.CreatedAt
 
@@ -487,8 +487,8 @@ func convertSQLCAuditEvent(e postgressqlc.AuditEvent) *domain.AuditEvent {
 		ID:          domain.UUID(e.ID),
 		TenantID:    domain.UUID(e.TenantID),
 		Seq:         e.Seq,
-		PrevHash:    string(e.PrevHash),
-		ChainHash:   string(e.Hash),
+		PrevHash:    hex.EncodeToString(e.PrevHash),
+		ChainHash:   hex.EncodeToString(e.Hash),
 		ActorUserID: actorUserID,
 		Action:      e.Action,
 		EntityType:  entityType,
