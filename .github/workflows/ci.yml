@@ -22,7 +22,7 @@ jobs:
         env:
           POSTGRES_DB: agent_gateway
           POSTGRES_USER: gateway
-          POSTGRES_PASSWORD: gateway
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         ports: [5432:5432]
         options: >-
           --health-cmd "pg_isready -U gateway -d agent_gateway"
@@ -34,7 +34,8 @@ jobs:
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
     env:
-      DATABASE_URL: postgres://gateway:gateway@localhost:5432/agent_gateway?sslmode=disable
+      DATABASE_URL: postgres://gateway:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/agent_gateway?sslmode=disable
+      TEST_ROLE_PASSWORD: ${{ secrets.TEST_ROLE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -64,21 +65,21 @@ jobs:
           goose -dir migrations postgres "$DATABASE_URL" up
       - name: Create test role and set test DSN
         run: |
-          psql "$DATABASE_URL" -c "CREATE ROLE gateway_test WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'gateway_test';"
+          psql "$DATABASE_URL" -c "CREATE ROLE gateway_test WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '$TEST_ROLE_PASSWORD';"
           psql "$DATABASE_URL" -c "GRANT USAGE ON SCHEMA public TO gateway_test;"
           psql "$DATABASE_URL" -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gateway_test;"
           psql "$DATABASE_URL" -c "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gateway_test;"
       - name: Verify test role
         run: |
-          psql "postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable" -c "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;"
+          psql "postgres://gateway_test:$TEST_ROLE_PASSWORD@localhost:5432/agent_gateway?sslmode=disable" -c "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;"
       - name: Run unit tests
         run: go test -tags=unit -count=1 ./internal/...
         env:
-          TEST_DATABASE_URL: postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable
+          TEST_DATABASE_URL: postgres://gateway_test:$TEST_ROLE_PASSWORD@localhost:5432/agent_gateway?sslmode=disable
       - name: Run integration tests
         run: go test -tags integration -count=1 -v ./...
         env:
-          TEST_DATABASE_URL: postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable
+          TEST_DATABASE_URL: postgres://gateway_test:$TEST_ROLE_PASSWORD@localhost:5432/agent_gateway?sslmode=disable
       - name: Check for SKIP in test output
         run: |
           # This step runs integration tests again to check for SKIP
@@ -107,7 +108,7 @@ jobs:
             exit 1
           fi
         env:
-          TEST_DATABASE_URL: postgres://gateway_test:gateway_test@localhost:5432/agent_gateway?sslmode=disable
+          TEST_DATABASE_URL: postgres://gateway_test:$TEST_ROLE_PASSWORD@localhost:5432/agent_gateway?sslmode=disable
 
   build:
     name: Build & Push Docker Image
