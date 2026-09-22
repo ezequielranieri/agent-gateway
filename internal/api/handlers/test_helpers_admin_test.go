@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ezequielranieri/agent-gateway/internal/adapter/jwt"
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/postgres"
 	"github.com/ezequielranieri/agent-gateway/internal/domain"
 )
 
@@ -82,20 +83,22 @@ func createTestTokenWithService(t *testing.T, svc *jwt.AuthService, userID, tena
 
 // createTestTool inserts a tool definition into the database for testing
 func createTestTool(ctx context.Context, pool *pgxpool.Pool, tenantID domain.UUID, name, description string, parameters, grants json.RawMessage, timeoutMs uint64, memoryPages uint32, hash string) error {
-	_, err := pool.Exec(ctx, `
-		INSERT INTO public.tool_definitions (tenant_id, name, description, input_schema, grants, execution_timeout_ms, memory_pages, hash, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
-		ON CONFLICT (tenant_id, name) WHERE is_active = true DO UPDATE SET
-			description = EXCLUDED.description,
-			input_schema = EXCLUDED.input_schema,
-			grants = EXCLUDED.grants,
-			execution_timeout_ms = EXCLUDED.execution_timeout_ms,
-			memory_pages = EXCLUDED.memory_pages,
-			hash = EXCLUDED.hash,
-			is_active = EXCLUDED.is_active,
-			updated_at = now()
-	`, tenantID, name, description, parameters, grants, timeoutMs, memoryPages, hash)
-	return err
+	return postgres.WithTenant(ctx, pool, tenantID, func(ctx context.Context) error {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO public.tool_definitions (tenant_id, name, description, input_schema, grants, execution_timeout_ms, memory_pages, hash, is_active)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
+			ON CONFLICT (tenant_id, name) WHERE is_active = true DO UPDATE SET
+				description = EXCLUDED.description,
+				input_schema = EXCLUDED.input_schema,
+				grants = EXCLUDED.grants,
+				execution_timeout_ms = EXCLUDED.execution_timeout_ms,
+				memory_pages = EXCLUDED.memory_pages,
+				hash = EXCLUDED.hash,
+				is_active = EXCLUDED.is_active,
+				updated_at = now()
+		`, tenantID, name, description, parameters, grants, timeoutMs, memoryPages, hash)
+		return err
+	})
 }
 
 // getTestWASMPath returns the path to a test WASM module

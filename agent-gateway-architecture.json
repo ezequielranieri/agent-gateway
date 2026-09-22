@@ -14,22 +14,10 @@
     },
     "views": [
       {
-        "id": "request-flow",
-        "label": "Primary request flow",
-        "focus": ["clients", "http-server", "auth-mw", "tenant-mw", "delegation-mw", "ratelimit-mw", "audit-mw", "guardrails-mw", "hitl-mw", "chat-usecase", "router", "fallback-chain", "llm-providers"],
-        "note": "Follow a chat completion request from the edge through middleware chain, orchestration, and LLM providers."
-      },
-      {
-        "id": "tool-execution",
-        "label": "Tool execution & HITL",
-        "focus": ["chat-usecase", "tool-executor", "tool-repo", "hitl-usecase", "review-repo"],
-        "note": "See how tool calls are validated, executed (WASM), and gated by human-in-the-loop review."
-      },
-      {
-        "id": "data-and-infra",
-        "label": "Data layer & infrastructure",
-        "focus": ["postgres", "redis", "audit-repo", "quota-repo", "delegation-repo"],
-        "note": "Isolate the PostgreSQL-backed repositories and Redis-backed rate limiting/quotas."
+        "id": "overview",
+        "label": "System overview",
+        "focus": ["clients", "http-server", "middleware-chain", "chat-usecase", "router", "fallback-chain", "llm-providers", "tool-executor", "hitl-usecase", "postgres", "redis"],
+        "note": "Complete request flow from API clients through middleware, orchestration, and data layer."
       }
     ]
   },
@@ -37,10 +25,10 @@
     "mode": "grid",
     "origin": [0, 0],
     "cols": 12,
-    "gapX": 40,
-    "gapY": 36,
-    "cellW": 150,
-    "cellH": 90
+    "gapX": 64,
+    "gapY": 56,
+    "cellW": 200,
+    "cellH": 110
   },
   "components": [
     {
@@ -48,8 +36,8 @@
       "type": "external",
       "label": "API Clients",
       "sublabel": "Apps · Agents · Users",
-      "pos": [60, 100],
-      "size": [180, 64],
+      "pos": [60, 80],
+      "size": [240, 90],
       "sources": [{ "path": "cmd/gateway/main.go", "line": 1, "label": "Entry point" }]
     },
     {
@@ -57,98 +45,44 @@
       "type": "backend",
       "label": "HTTP Server",
       "sublabel": "Chi router :8080",
-      "pos": [300, 100],
-      "size": [180, 64],
+      "pos": [380, 80],
+      "size": [240, 90],
       "sources": [{ "path": "cmd/gateway/main.go", "line": 286, "label": "Server creation" }]
     },
     {
-      "id": "auth-mw",
+      "id": "middleware-chain",
       "type": "security",
-      "label": "Auth Middleware",
-      "sublabel": "JWT verify + key rotation",
-      "pos": [540, 100],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/middleware/auth.go", "line": 1, "label": "Auth middleware" }]
-    },
-    {
-      "id": "tenant-mw",
-      "type": "backend",
-      "label": "Tenant Middleware",
-      "sublabel": "Tenant resolution + context",
-      "pos": [780, 100],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/middleware/tenant.go", "line": 1, "label": "Tenant middleware" }]
-    },
-    {
-      "id": "delegation-mw",
-      "type": "security",
-      "label": "Delegation Middleware",
-      "sublabel": "Depth/Fan-out + budget",
-      "pos": [1020, 100],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/middleware/delegation.go", "line": 1, "label": "Delegation middleware" }]
-    },
-    {
-      "id": "ratelimit-mw",
-      "type": "backend",
-      "label": "Rate Limit Middleware",
-      "sublabel": "Redis token bucket",
-      "pos": [1260, 100],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/middleware/ratelimit.go", "line": 1, "label": "Rate limit middleware" }]
-    },
-    {
-      "id": "audit-mw",
-      "type": "backend",
-      "label": "Audit Middleware",
-      "sublabel": "Immutable event log",
-      "pos": [1500, 100],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/middleware/audit.go", "line": 1, "label": "Audit middleware" }]
-    },
-    {
-      "id": "guardrails-mw",
-      "type": "security",
-      "label": "Guardrails Middleware",
-      "sublabel": "Local + External scan",
-      "pos": [1740, 100],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/middleware/guardrails.go", "line": 1, "label": "Guardrails middleware" }]
-    },
-    {
-      "id": "hitl-mw",
-      "type": "backend",
-      "label": "HITL Middleware",
-      "sublabel": "SSE streaming + polling",
-      "pos": [1980, 100],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/middleware/hitl.go", "line": 1, "label": "HITL middleware" }]
+      "label": "Middleware Chain",
+      "sublabel": "Auth → Tenant → Delegation → RateLimit → Audit → Guardrails → HITL",
+      "pos": [700, 80],
+      "size": [400, 90],
+      "sources": [{ "path": "internal/api/router.go", "line": 54, "label": "Middleware stack" }]
     },
     {
       "id": "chat-usecase",
       "type": "backend",
       "label": "Chat Use Case",
       "sublabel": "Orchestrator + Fallback + Tool loop",
-      "pos": [1980, 260],
-      "size": [260, 74],
+      "pos": [1200, 80],
+      "size": [360, 100],
       "sources": [{ "path": "internal/usecase/chat/orchestrator.go", "line": 26, "label": "ChatUsecase" }]
     },
     {
       "id": "router",
       "type": "backend",
       "label": "Model Router",
-      "sublabel": "Provider registry + health",
-      "pos": [1980, 380],
-      "size": [260, 64],
+      "sublabel": "Provider registry + health checks",
+      "pos": [1200, 240],
+      "size": [360, 90],
       "sources": [{ "path": "internal/usecase/chat/router.go", "line": 1, "label": "Router" }]
     },
     {
       "id": "fallback-chain",
       "type": "backend",
       "label": "Fallback Chain",
-      "sublabel": "Circuit breaker + retry",
-      "pos": [1980, 500],
-      "size": [260, 64],
+      "sublabel": "Circuit breaker + retry + cost-aware",
+      "pos": [1200, 380],
+      "size": [360, 90],
       "sources": [{ "path": "internal/usecase/chat/fallback.go", "line": 1, "label": "FallbackChain" }]
     },
     {
@@ -156,8 +90,8 @@
       "type": "external",
       "label": "LLM Providers",
       "sublabel": "OpenAI · Anthropic · Ollama",
-      "pos": [2320, 380],
-      "size": [200, 64],
+      "pos": [1640, 240],
+      "size": [280, 90],
       "sources": [{ "path": "internal/adapter/provider/openai/client.go", "line": 1, "label": "OpenAI adapter" }, { "path": "internal/adapter/provider/anthropic/client.go", "line": 1, "label": "Anthropic adapter" }, { "path": "internal/adapter/provider/ollama/client.go", "line": 1, "label": "Ollama adapter" }]
     },
     {
@@ -165,8 +99,8 @@
       "type": "backend",
       "label": "Tool Executor",
       "sublabel": "WASM (wazero) · Mock",
-      "pos": [2320, 500],
-      "size": [200, 64],
+      "pos": [1640, 380],
+      "size": [280, 90],
       "sources": [{ "path": "internal/adapter/tool/wazero/executor.go", "line": 1, "label": "Wazero executor" }, { "path": "internal/adapter/tool/mock/executor.go", "line": 1, "label": "Mock executor" }]
     },
     {
@@ -174,62 +108,53 @@
       "type": "database",
       "label": "Tool Repository",
       "sublabel": "PostgreSQL + cache + audit",
-      "pos": [2560, 500],
-      "size": [200, 64],
+      "pos": [2000, 380],
+      "size": [280, 90],
       "sources": [{ "path": "internal/adapter/postgres/tool_repository.go", "line": 1, "label": "Postgres tool repo" }]
     },
     {
       "id": "hitl-usecase",
       "type": "backend",
       "label": "HITL Use Case",
-      "sublabel": "Review requests + SSE",
-      "pos": [2320, 260],
-      "size": [200, 64],
+      "sublabel": "Review requests + SSE tickets",
+      "pos": [1640, 80],
+      "size": [280, 90],
       "sources": [{ "path": "internal/usecase/hitl/hitl.go", "line": 1, "label": "HITL use case" }]
-    },
-    {
-      "id": "review-repo",
-      "type": "database",
-      "label": "Review Repository",
-      "sublabel": "PostgreSQL",
-      "pos": [2560, 260],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/adapter/postgres/review_repository.go", "line": 1, "label": "Review repository" }]
     },
     {
       "id": "auth-usecase",
       "type": "backend",
       "label": "Auth Use Cases",
-      "sublabel": "Login · Register · Refresh",
-      "pos": [300, 260],
-      "size": [220, 64],
+      "sublabel": "Login · Register · Refresh · Sessions",
+      "pos": [380, 220],
+      "size": [300, 90],
       "sources": [{ "path": "internal/usecase/auth/login.go", "line": 1, "label": "Auth use cases" }]
     },
     {
       "id": "tenant-usecase",
       "type": "backend",
       "label": "Tenant Use Case",
-      "sublabel": "CRUD + status",
-      "pos": [300, 360],
-      "size": [220, 64],
+      "sublabel": "CRUD + status management",
+      "pos": [380, 360],
+      "size": [300, 90],
       "sources": [{ "path": "internal/usecase/tenant/tenant.go", "line": 1, "label": "Tenant use case" }]
     },
     {
       "id": "user-usecase",
       "type": "backend",
       "label": "User Use Case",
-      "sublabel": "Profile · Roles · Perms",
-      "pos": [300, 460],
-      "size": [220, 64],
+      "sublabel": "Profile · Roles · Permissions",
+      "pos": [380, 500],
+      "size": [300, 90],
       "sources": [{ "path": "internal/usecase/user/user.go", "line": 1, "label": "User use case" }]
     },
     {
       "id": "role-usecase",
       "type": "backend",
       "label": "Role Use Case",
-      "sublabel": "RBAC + grants",
-      "pos": [300, 560],
-      "size": [220, 64],
+      "sublabel": "RBAC + permission grants",
+      "pos": [380, 640],
+      "size": [300, 90],
       "sources": [{ "path": "internal/usecase/role/role.go", "line": 1, "label": "Role use case" }]
     },
     {
@@ -237,17 +162,17 @@
       "type": "backend",
       "label": "Quota Use Case",
       "sublabel": "Tenant/User/Role limits",
-      "pos": [300, 660],
-      "size": [220, 64],
+      "pos": [380, 780],
+      "size": [300, 90],
       "sources": [{ "path": "internal/usecase/quota/quota.go", "line": 1, "label": "Quota use case" }]
     },
     {
       "id": "postgres",
       "type": "database",
       "label": "PostgreSQL",
-      "sublabel": "Primary :5432 · sqlc",
-      "pos": [540, 840],
-      "size": [240, 74],
+      "sublabel": "Primary :5432 · sqlc · migrations",
+      "pos": [700, 480],
+      "size": [360, 100],
       "sources": [{ "path": "internal/adapter/postgres/db.go", "line": 1, "label": "Postgres adapters" }]
     },
     {
@@ -255,107 +180,53 @@
       "type": "database",
       "label": "Redis",
       "sublabel": "Cluster :6379 · Rate limit · Quotas · Budget",
-      "pos": [540, 960],
-      "size": [240, 74],
+      "pos": [700, 630],
+      "size": [360, 100],
       "sources": [{ "path": "internal/adapter/redis/ratelimit.go", "line": 1, "label": "Redis adapters" }]
-    },
-    {
-      "id": "audit-repo",
-      "type": "database",
-      "label": "Audit Repository",
-      "sublabel": "Append-only · Chain verify",
-      "pos": [900, 840],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/adapter/postgres/audit_repository.go", "line": 1, "label": "Audit repository" }]
-    },
-    {
-      "id": "quota-repo",
-      "type": "database",
-      "label": "Quota Repository",
-      "sublabel": "PostgreSQL + Redis resolver",
-      "pos": [900, 960],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/adapter/postgres/quota_repository.go", "line": 1, "label": "Quota repository" }]
-    },
-    {
-      "id": "delegation-repo",
-      "type": "database",
-      "label": "Delegation Repository",
-      "sublabel": "PostgreSQL + Redis budget",
-      "pos": [900, 1080],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/adapter/postgres/delegation_repository.go", "line": 1, "label": "Delegation repository" }]
-    },
-    {
-      "id": "pricing-service",
-      "type": "backend",
-      "label": "Pricing Service",
-      "sublabel": "Cost tracking · Estimates",
-      "pos": [2560, 380],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/adapter/pricing/service.go", "line": 1, "label": "Pricing service" }]
     },
     {
       "id": "jwt-service",
       "type": "security",
       "label": "JWT Service",
       "sublabel": "KeyStore · RS256 · Rotation",
-      "pos": [2560, 100],
-      "size": [200, 64],
+      "pos": [2000, 80],
+      "size": [280, 90],
       "sources": [{ "path": "internal/adapter/jwt/token.go", "line": 1, "label": "JWT adapter" }]
-    },
-    {
-      "id": "guardrail-local",
-      "type": "security",
-      "label": "Local Guardrail",
-      "sublabel": "PII · Injection · Wordlist",
-      "pos": [2560, 200],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/adapter/guardrail/local.go", "line": 1, "label": "Local guardrail" }]
-    },
-    {
-      "id": "guardrail-external",
-      "type": "external",
-      "label": "External Classifiers",
-      "sublabel": "OpenAI · LlamaGuard · Anthropic",
-      "pos": [2560, 300],
-      "size": [200, 64],
-      "sources": [{ "path": "internal/adapter/guardrail/external/factory.go", "line": 1, "label": "External classifiers" }]
     },
     {
       "id": "composite-guardrail",
       "type": "security",
       "label": "Composite Guardrail",
-      "sublabel": "Seq/Parallel · Merge · Fail",
-      "pos": [2560, 400],
-      "size": [200, 74],
+      "sublabel": "Seq/Parallel · Merge logic · Fail behavior",
+      "pos": [2000, 220],
+      "size": [280, 100],
       "sources": [{ "path": "internal/adapter/guardrail/composite.go", "line": 1, "label": "Composite guardrail" }]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "Application Layer (cmd/gateway + internal/usecase)",
-      "wraps": ["http-server", "auth-mw", "tenant-mw", "delegation-mw", "ratelimit-mw", "audit-mw", "guardrails-mw", "hitl-mw", "chat-usecase", "router", "fallback-chain", "auth-usecase", "tenant-usecase", "user-usecase", "role-usecase", "quota-usecase", "hitl-usecase"],
-      "pad": 24
+      "label": "Application Layer",
+      "wraps": ["http-server", "middleware-chain", "chat-usecase", "router", "fallback-chain", "auth-usecase", "tenant-usecase", "user-usecase", "role-usecase", "quota-usecase"],
+      "pad": 32
     },
     {
       "kind": "security-group",
       "label": "Security Boundary",
-      "wraps": ["auth-mw", "delegation-mw", "guardrails-mw", "jwt-service", "guardrail-local", "guardrail-external", "composite-guardrail"],
-      "pad": 20
+      "wraps": ["middleware-chain", "jwt-service", "composite-guardrail"],
+      "pad": 28
     },
     {
       "kind": "region",
-      "label": "Data Layer (internal/adapter/postgres, internal/adapter/redis)",
-      "wraps": ["postgres", "redis", "audit-repo", "quota-repo", "delegation-repo", "review-repo", "tool-repo"],
-      "pad": 24
+      "label": "Data Layer",
+      "wraps": ["postgres", "redis", "tool-repo"],
+      "pad": 32
     },
     {
       "kind": "region",
       "label": "External Providers",
-      "wraps": ["llm-providers", "guardrail-external"],
-      "pad": 20
+      "wraps": ["llm-providers"],
+      "pad": 28
     }
   ],
   "connections": [
@@ -367,78 +238,32 @@
       "variant": "emphasis"
     },
     {
-      "id": "http-to-auth",
+      "id": "http-to-middleware",
       "from": "http-server",
-      "to": "auth-mw",
-      "label": "Authenticate",
-      "variant": "emphasis",
-      "labelAt": [420, 120]
+      "to": "middleware-chain",
+      "label": "Request pipeline",
+      "variant": "emphasis"
     },
     {
-      "id": "auth-to-tenant",
-      "from": "auth-mw",
-      "to": "tenant-mw",
-      "label": "Resolve tenant",
-      "labelAt": [680, 120]
-    },
-    {
-      "id": "tenant-to-delegation",
-      "from": "tenant-mw",
-      "to": "delegation-mw",
-      "label": "Check delegation",
-      "variant": "security",
-      "labelAt": [920, 120]
-    },
-    {
-      "id": "delegation-to-ratelimit",
-      "from": "delegation-mw",
-      "to": "ratelimit-mw",
-      "label": "Rate limit",
-      "labelAt": [1160, 120]
-    },
-    {
-      "id": "ratelimit-to-audit",
-      "from": "ratelimit-mw",
-      "to": "audit-mw",
-      "label": "Audit log",
-      "labelAt": [1400, 120]
-    },
-    {
-      "id": "audit-to-guardrails",
-      "from": "audit-mw",
-      "to": "guardrails-mw",
-      "label": "Content scan",
-      "variant": "security",
-      "labelAt": [1640, 120]
-    },
-    {
-      "id": "guardrails-to-hitl",
-      "from": "guardrails-mw",
-      "to": "hitl-mw",
-      "label": "Review gate",
-      "labelAt": [1880, 120]
-    },
-    {
-      "id": "hitl-to-chat",
-      "from": "hitl-mw",
+      "id": "middleware-to-chat",
+      "from": "middleware-chain",
       "to": "chat-usecase",
       "label": "Chat completions",
-      "variant": "emphasis",
-      "labelAt": [2100, 200]
+      "variant": "emphasis"
     },
     {
       "id": "chat-to-router",
       "from": "chat-usecase",
       "to": "router",
       "label": "Route request",
-      "labelAt": [2100, 310]
+      "labelAt": [1380, 170]
     },
     {
       "id": "chat-to-fallback",
       "from": "chat-usecase",
       "to": "fallback-chain",
       "label": "Execute with fallback",
-      "labelAt": [2100, 420]
+      "labelAt": [1380, 310]
     },
     {
       "id": "fallback-to-providers",
@@ -446,7 +271,7 @@
       "to": "llm-providers",
       "label": "HTTP/HTTPS",
       "variant": "emphasis",
-      "labelAt": [2150, 400]
+      "labelAt": [1420, 300]
     },
     {
       "id": "chat-to-tool-executor",
@@ -454,14 +279,14 @@
       "to": "tool-executor",
       "label": "Execute tool calls",
       "variant": "emphasis",
-      "labelAt": [2200, 520]
+      "labelAt": [1420, 420]
     },
     {
       "id": "chat-to-tool-repo",
       "from": "chat-usecase",
       "to": "tool-repo",
       "label": "Validate + re-resolve",
-      "labelAt": [2200, 580]
+      "labelAt": [1420, 480]
     },
     {
       "id": "chat-to-hitl",
@@ -469,134 +294,109 @@
       "to": "hitl-usecase",
       "label": "Request approval",
       "variant": "security",
-      "labelAt": [2150, 280]
-    },
-    {
-      "id": "chat-to-pricing",
-      "from": "chat-usecase",
-      "to": "pricing-service",
-      "label": "Cost estimates",
-      "labelAt": [2200, 340]
+      "labelAt": [1420, 140]
     },
     {
       "id": "auth-to-jwt",
       "from": "auth-usecase",
       "to": "jwt-service",
       "label": "Sign/Verify tokens",
-      "variant": "security"
+      "variant": "security",
+      "labelAt": [530, 150]
     },
     {
       "id": "auth-to-postgres",
       "from": "auth-usecase",
       "to": "postgres",
-      "label": "User/Session CRUD"
+      "label": "User/Session CRUD",
+      "labelAt": [530, 280]
     },
     {
       "id": "tenant-to-postgres",
       "from": "tenant-usecase",
       "to": "postgres",
-      "label": "Tenant CRUD"
+      "label": "Tenant CRUD",
+      "labelAt": [530, 390]
     },
     {
       "id": "user-to-postgres",
       "from": "user-usecase",
       "to": "postgres",
-      "label": "User CRUD"
+      "label": "User CRUD",
+      "labelAt": [530, 500]
     },
     {
       "id": "role-to-postgres",
       "from": "role-usecase",
       "to": "postgres",
-      "label": "Role/Perm CRUD"
+      "label": "Role/Perm CRUD",
+      "labelAt": [530, 610]
     },
     {
       "id": "quota-to-postgres",
       "from": "quota-usecase",
       "to": "postgres",
-      "label": "Quota CRUD"
+      "label": "Quota CRUD",
+      "labelAt": [530, 720]
     },
     {
       "id": "quota-to-redis",
       "from": "quota-usecase",
       "to": "redis",
-      "label": "Quota cache"
+      "label": "Quota cache",
+      "labelAt": [530, 800]
     },
     {
-      "id": "ratelimit-to-redis",
-      "from": "ratelimit-mw",
+      "id": "middleware-to-redis",
+      "from": "middleware-chain",
       "to": "redis",
-      "label": "Token bucket"
+      "label": "Rate limit · Budget",
+      "variant": "dashed",
+      "labelAt": [530, 360]
     },
     {
-      "id": "audit-to-postgres",
-      "from": "audit-mw",
-      "to": "audit-repo",
-      "label": "Append event"
-    },
-    {
-      "id": "delegation-to-postgres",
-      "from": "delegation-mw",
-      "to": "delegation-repo",
-      "label": "Grant lifecycle"
-    },
-    {
-      "id": "delegation-to-redis",
-      "from": "delegation-mw",
-      "to": "redis",
-      "label": "Budget decrement"
+      "id": "middleware-to-postgres",
+      "from": "middleware-chain",
+      "to": "postgres",
+      "label": "Audit · Delegation",
+      "labelAt": [530, 200]
     },
     {
       "id": "tool-repo-to-postgres",
       "from": "tool-repo",
       "to": "postgres",
-      "label": "Tool defs"
+      "label": "Tool definitions",
+      "labelAt": [1700, 420]
     },
     {
       "id": "tool-executor-to-postgres",
       "from": "tool-executor",
       "to": "postgres",
-      "label": "WASM modules"
-    },
-    {
-      "id": "review-repo-to-postgres",
-      "from": "review-repo",
-      "to": "postgres",
-      "label": "Review requests"
+      "label": "WASM module store",
+      "labelAt": [1700, 340]
     },
     {
       "id": "router-to-providers",
       "from": "router",
       "to": "llm-providers",
-      "label": "Health checks"
+      "label": "Health checks",
+      "labelAt": [1420, 260]
     },
     {
-      "id": "guardrails-to-composite",
-      "from": "guardrails-mw",
+      "id": "middleware-to-guardrails",
+      "from": "middleware-chain",
       "to": "composite-guardrail",
-      "label": "Composite check",
-      "labelAt": [2050, 180]
+      "label": "Content scan",
+      "variant": "security",
+      "labelAt": [1350, 150]
     },
     {
-      "id": "composite-to-local",
-      "from": "composite-guardrail",
-      "to": "guardrail-local",
-      "label": "Local layer",
-      "labelAt": [2500, 220]
-    },
-    {
-      "id": "composite-to-external",
-      "from": "composite-guardrail",
-      "to": "guardrail-external",
-      "label": "External layer",
-      "variant": "dashed",
-      "labelAt": [2500, 280]
-    },
-    {
-      "id": "auth-mw-to-jwt",
-      "from": "auth-mw",
+      "id": "middleware-to-jwt",
+      "from": "middleware-chain",
       "to": "jwt-service",
       "label": "Verify JWT",
-      "variant": "security"
+      "variant": "security",
+      "labelAt": [1350, 100]
     }
   ],
   "cards": [

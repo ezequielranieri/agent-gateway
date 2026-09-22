@@ -111,6 +111,9 @@ func (r *ToolRepository) CreateToolDefinition(ctx context.Context, tenantID doma
 	}
 
 	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Use transaction-bound queries so RLS GUC is active on this connection
+		q := r.queries.WithTx(tx)
+
 		// Insert tool definition
 		params := postgressqlc.CreateToolDefinitionParams{
 			TenantID:           uuid.UUID(tenantID),
@@ -124,7 +127,7 @@ func (r *ToolRepository) CreateToolDefinition(ctx context.Context, tenantID doma
 			IsActive:           def.IsActive,
 		}
 
-		created, err := r.queries.CreateToolDefinition(ctx, params)
+		created, err := q.CreateToolDefinition(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -202,6 +205,9 @@ func (r *ToolRepository) UpdateToolDefinition(ctx context.Context, tenantID doma
 	}
 
 	err = WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Use transaction-bound queries so RLS GUC is active on this connection
+		q := r.queries.WithTx(tx)
+
 		// Update tool definition
 		params := postgressqlc.UpdateToolDefinitionParams{
 			TenantID:           uuid.UUID(tenantID),
@@ -215,7 +221,7 @@ func (r *ToolRepository) UpdateToolDefinition(ctx context.Context, tenantID doma
 			IsActive:           def.IsActive,
 		}
 
-		updated, err := r.queries.UpdateToolDefinition(ctx, params)
+		updated, err := q.UpdateToolDefinition(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -259,13 +265,16 @@ func (r *ToolRepository) DeactivateToolDefinition(ctx context.Context, tenantID 
 	oldHash := existing.Hash
 
 	err = WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Use transaction-bound queries so RLS GUC is active on this connection
+		q := r.queries.WithTx(tx)
+
 		// Soft delete
 		params := postgressqlc.DeactivateToolDefinitionParams{
 			TenantID: uuid.UUID(tenantID),
 			Name:     name,
 		}
 
-		if err := r.queries.DeactivateToolDefinition(ctx, params); err != nil {
+		if err := q.DeactivateToolDefinition(ctx, params); err != nil {
 			return err
 		}
 
@@ -300,6 +309,9 @@ func (r *ToolRepository) UpsertToolDefinition(ctx context.Context, tenantID doma
 	}
 
 	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Use transaction-bound queries so RLS GUC is active on this connection
+		q := r.queries.WithTx(tx)
+
 		params := postgressqlc.UpsertToolDefinitionParams{
 			TenantID:           uuid.UUID(tenantID),
 			Name:               def.Name,
@@ -312,7 +324,7 @@ func (r *ToolRepository) UpsertToolDefinition(ctx context.Context, tenantID doma
 			IsActive:           def.IsActive,
 		}
 
-		created, err := r.queries.UpsertToolDefinition(ctx, params)
+		created, err := q.UpsertToolDefinition(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -343,6 +355,9 @@ func (r *ToolRepository) InitFromConfig(ctx context.Context, tenantID domain.UUI
 	r.logger.Info().Str("tenant", tenantID.String()).Int("tools", len(cfg.Tools)).Msg("Starting boot seed")
 
 	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		// Use transaction-bound queries so RLS GUC is active on this connection
+		q := r.queries.WithTx(tx)
+
 		for _, toolConfig := range cfg.Tools {
 			// Compute hash from FunctionDef (name, description, parameters)
 			// For boot seed, we need to extract the function definition
@@ -364,7 +379,7 @@ func (r *ToolRepository) InitFromConfig(ctx context.Context, tenantID domain.UUI
 				IsActive:           true,
 			}
 
-			if _, err := r.queries.UpsertToolDefinition(ctx, params); err != nil {
+			if _, err := q.UpsertToolDefinition(ctx, params); err != nil {
 				return err
 			}
 
