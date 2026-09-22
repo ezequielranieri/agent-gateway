@@ -11,24 +11,16 @@
       "provider": "github",
       "link_mode": "web",
       "revision": "4aa406efbce74e76dd641d970c178851c5f581f7"
-    },
-    "views": [
-      {
-        "id": "overview",
-        "label": "System overview",
-        "focus": ["clients", "http-server", "middleware-chain", "chat-usecase", "router", "fallback-chain", "llm-providers", "tool-executor", "hitl-usecase", "postgres", "redis"],
-        "note": "Complete request flow from API clients through middleware, orchestration, and data layer."
-      }
-    ]
+    }
   },
   "layout": {
     "mode": "grid",
     "origin": [0, 0],
     "cols": 12,
-    "gapX": 64,
-    "gapY": 56,
-    "cellW": 200,
-    "cellH": 110
+    "gapX": 140,
+    "gapY": 120,
+    "cellW": 280,
+    "cellH": 150
   },
   "components": [
     {
@@ -36,8 +28,8 @@
       "type": "external",
       "label": "API Clients",
       "sublabel": "Apps · Agents · Users",
-      "pos": [60, 80],
-      "size": [240, 90],
+      "pos": [60, 60],
+      "size": [320, 130],
       "sources": [{ "path": "cmd/gateway/main.go", "line": 1, "label": "Entry point" }]
     },
     {
@@ -45,8 +37,8 @@
       "type": "backend",
       "label": "HTTP Server",
       "sublabel": "Chi router :8080",
-      "pos": [380, 80],
-      "size": [240, 90],
+      "pos": [520, 60],
+      "size": [320, 130],
       "sources": [{ "path": "cmd/gateway/main.go", "line": 286, "label": "Server creation" }]
     },
     {
@@ -54,8 +46,8 @@
       "type": "security",
       "label": "Middleware Chain",
       "sublabel": "Auth → Tenant → Delegation → RateLimit → Audit → Guardrails → HITL",
-      "pos": [700, 80],
-      "size": [400, 90],
+      "pos": [980, 60],
+      "size": [560, 130],
       "sources": [{ "path": "internal/api/router.go", "line": 54, "label": "Middleware stack" }]
     },
     {
@@ -63,35 +55,17 @@
       "type": "backend",
       "label": "Chat Use Case",
       "sublabel": "Orchestrator + Fallback + Tool loop",
-      "pos": [1200, 80],
-      "size": [360, 100],
+      "pos": [1680, 60],
+      "size": [520, 140],
       "sources": [{ "path": "internal/usecase/chat/orchestrator.go", "line": 26, "label": "ChatUsecase" }]
-    },
-    {
-      "id": "router",
-      "type": "backend",
-      "label": "Model Router",
-      "sublabel": "Provider registry + health checks",
-      "pos": [1200, 240],
-      "size": [360, 90],
-      "sources": [{ "path": "internal/usecase/chat/router.go", "line": 1, "label": "Router" }]
-    },
-    {
-      "id": "fallback-chain",
-      "type": "backend",
-      "label": "Fallback Chain",
-      "sublabel": "Circuit breaker + retry + cost-aware",
-      "pos": [1200, 380],
-      "size": [360, 90],
-      "sources": [{ "path": "internal/usecase/chat/fallback.go", "line": 1, "label": "FallbackChain" }]
     },
     {
       "id": "llm-providers",
       "type": "external",
       "label": "LLM Providers",
       "sublabel": "OpenAI · Anthropic · Ollama",
-      "pos": [1640, 240],
-      "size": [280, 90],
+      "pos": [2320, 250],
+      "size": [380, 130],
       "sources": [{ "path": "internal/adapter/provider/openai/client.go", "line": 1, "label": "OpenAI adapter" }, { "path": "internal/adapter/provider/anthropic/client.go", "line": 1, "label": "Anthropic adapter" }, { "path": "internal/adapter/provider/ollama/client.go", "line": 1, "label": "Ollama adapter" }]
     },
     {
@@ -99,80 +73,26 @@
       "type": "backend",
       "label": "Tool Executor",
       "sublabel": "WASM (wazero) · Mock",
-      "pos": [1640, 380],
-      "size": [280, 90],
+      "pos": [2320, 450],
+      "size": [380, 130],
       "sources": [{ "path": "internal/adapter/tool/wazero/executor.go", "line": 1, "label": "Wazero executor" }, { "path": "internal/adapter/tool/mock/executor.go", "line": 1, "label": "Mock executor" }]
-    },
-    {
-      "id": "tool-repo",
-      "type": "database",
-      "label": "Tool Repository",
-      "sublabel": "PostgreSQL + cache + audit",
-      "pos": [2000, 380],
-      "size": [280, 90],
-      "sources": [{ "path": "internal/adapter/postgres/tool_repository.go", "line": 1, "label": "Postgres tool repo" }]
     },
     {
       "id": "hitl-usecase",
       "type": "backend",
       "label": "HITL Use Case",
       "sublabel": "Review requests + SSE tickets",
-      "pos": [1640, 80],
-      "size": [280, 90],
+      "pos": [2320, 60],
+      "size": [380, 130],
       "sources": [{ "path": "internal/usecase/hitl/hitl.go", "line": 1, "label": "HITL use case" }]
-    },
-    {
-      "id": "auth-usecase",
-      "type": "backend",
-      "label": "Auth Use Cases",
-      "sublabel": "Login · Register · Refresh · Sessions",
-      "pos": [380, 220],
-      "size": [300, 90],
-      "sources": [{ "path": "internal/usecase/auth/login.go", "line": 1, "label": "Auth use cases" }]
-    },
-    {
-      "id": "tenant-usecase",
-      "type": "backend",
-      "label": "Tenant Use Case",
-      "sublabel": "CRUD + status management",
-      "pos": [380, 360],
-      "size": [300, 90],
-      "sources": [{ "path": "internal/usecase/tenant/tenant.go", "line": 1, "label": "Tenant use case" }]
-    },
-    {
-      "id": "user-usecase",
-      "type": "backend",
-      "label": "User Use Case",
-      "sublabel": "Profile · Roles · Permissions",
-      "pos": [380, 500],
-      "size": [300, 90],
-      "sources": [{ "path": "internal/usecase/user/user.go", "line": 1, "label": "User use case" }]
-    },
-    {
-      "id": "role-usecase",
-      "type": "backend",
-      "label": "Role Use Case",
-      "sublabel": "RBAC + permission grants",
-      "pos": [380, 640],
-      "size": [300, 90],
-      "sources": [{ "path": "internal/usecase/role/role.go", "line": 1, "label": "Role use case" }]
-    },
-    {
-      "id": "quota-usecase",
-      "type": "backend",
-      "label": "Quota Use Case",
-      "sublabel": "Tenant/User/Role limits",
-      "pos": [380, 780],
-      "size": [300, 90],
-      "sources": [{ "path": "internal/usecase/quota/quota.go", "line": 1, "label": "Quota use case" }]
     },
     {
       "id": "postgres",
       "type": "database",
       "label": "PostgreSQL",
       "sublabel": "Primary :5432 · sqlc · migrations",
-      "pos": [700, 480],
-      "size": [360, 100],
+      "pos": [980, 540],
+      "size": [560, 140],
       "sources": [{ "path": "internal/adapter/postgres/db.go", "line": 1, "label": "Postgres adapters" }]
     },
     {
@@ -180,8 +100,8 @@
       "type": "database",
       "label": "Redis",
       "sublabel": "Cluster :6379 · Rate limit · Quotas · Budget",
-      "pos": [700, 630],
-      "size": [360, 100],
+      "pos": [980, 740],
+      "size": [560, 140],
       "sources": [{ "path": "internal/adapter/redis/ratelimit.go", "line": 1, "label": "Redis adapters" }]
     },
     {
@@ -189,17 +109,17 @@
       "type": "security",
       "label": "JWT Service",
       "sublabel": "KeyStore · RS256 · Rotation",
-      "pos": [2000, 80],
-      "size": [280, 90],
+      "pos": [2820, 60],
+      "size": [380, 130],
       "sources": [{ "path": "internal/adapter/jwt/token.go", "line": 1, "label": "JWT adapter" }]
     },
     {
       "id": "composite-guardrail",
       "type": "security",
       "label": "Composite Guardrail",
-      "sublabel": "Seq/Parallel · Merge logic · Fail behavior",
-      "pos": [2000, 220],
-      "size": [280, 100],
+      "sublabel": "Seq/Parallel · Merge · Fail",
+      "pos": [2820, 250],
+      "size": [380, 140],
       "sources": [{ "path": "internal/adapter/guardrail/composite.go", "line": 1, "label": "Composite guardrail" }]
     }
   ],
@@ -207,26 +127,26 @@
     {
       "kind": "region",
       "label": "Application Layer",
-      "wraps": ["http-server", "middleware-chain", "chat-usecase", "router", "fallback-chain", "auth-usecase", "tenant-usecase", "user-usecase", "role-usecase", "quota-usecase"],
-      "pad": 32
+      "wraps": ["http-server", "middleware-chain", "chat-usecase"],
+      "pad": 48
     },
     {
       "kind": "security-group",
       "label": "Security Boundary",
       "wraps": ["middleware-chain", "jwt-service", "composite-guardrail"],
-      "pad": 28
+      "pad": 44
     },
     {
       "kind": "region",
       "label": "Data Layer",
-      "wraps": ["postgres", "redis", "tool-repo"],
-      "pad": 32
+      "wraps": ["postgres", "redis"],
+      "pad": 48
     },
     {
       "kind": "region",
       "label": "External Providers",
       "wraps": ["llm-providers"],
-      "pad": 28
+      "pad": 44
     }
   ],
   "connections": [
@@ -252,41 +172,24 @@
       "variant": "emphasis"
     },
     {
-      "id": "chat-to-router",
+      "id": "chat-to-llm",
       "from": "chat-usecase",
-      "to": "router",
-      "label": "Route request",
-      "labelAt": [1380, 170]
-    },
-    {
-      "id": "chat-to-fallback",
-      "from": "chat-usecase",
-      "to": "fallback-chain",
-      "label": "Execute with fallback",
-      "labelAt": [1380, 310]
-    },
-    {
-      "id": "fallback-to-providers",
-      "from": "fallback-chain",
       "to": "llm-providers",
       "label": "HTTP/HTTPS",
       "variant": "emphasis",
-      "labelAt": [1420, 300]
+      "route": "orthogonal-h",
+      "via": [[1940, 130], [2140, 130], [2140, 315]],
+      "labelAt": [2140, 220]
     },
     {
-      "id": "chat-to-tool-executor",
+      "id": "chat-to-tool",
       "from": "chat-usecase",
       "to": "tool-executor",
       "label": "Execute tool calls",
       "variant": "emphasis",
-      "labelAt": [1420, 420]
-    },
-    {
-      "id": "chat-to-tool-repo",
-      "from": "chat-usecase",
-      "to": "tool-repo",
-      "label": "Validate + re-resolve",
-      "labelAt": [1420, 480]
+      "route": "orthogonal-h",
+      "via": [[1940, 130], [2140, 130], [2140, 515]],
+      "labelAt": [2140, 420]
     },
     {
       "id": "chat-to-hitl",
@@ -294,57 +197,17 @@
       "to": "hitl-usecase",
       "label": "Request approval",
       "variant": "security",
-      "labelAt": [1420, 140]
+      "route": "straight",
+      "labelAt": [2000, 125]
     },
     {
-      "id": "auth-to-jwt",
-      "from": "auth-usecase",
-      "to": "jwt-service",
-      "label": "Sign/Verify tokens",
-      "variant": "security",
-      "labelAt": [530, 150]
-    },
-    {
-      "id": "auth-to-postgres",
-      "from": "auth-usecase",
+      "id": "middleware-to-postgres",
+      "from": "middleware-chain",
       "to": "postgres",
-      "label": "User/Session CRUD",
-      "labelAt": [530, 280]
-    },
-    {
-      "id": "tenant-to-postgres",
-      "from": "tenant-usecase",
-      "to": "postgres",
-      "label": "Tenant CRUD",
-      "labelAt": [530, 390]
-    },
-    {
-      "id": "user-to-postgres",
-      "from": "user-usecase",
-      "to": "postgres",
-      "label": "User CRUD",
-      "labelAt": [530, 500]
-    },
-    {
-      "id": "role-to-postgres",
-      "from": "role-usecase",
-      "to": "postgres",
-      "label": "Role/Perm CRUD",
-      "labelAt": [530, 610]
-    },
-    {
-      "id": "quota-to-postgres",
-      "from": "quota-usecase",
-      "to": "postgres",
-      "label": "Quota CRUD",
-      "labelAt": [530, 720]
-    },
-    {
-      "id": "quota-to-redis",
-      "from": "quota-usecase",
-      "to": "redis",
-      "label": "Quota cache",
-      "labelAt": [530, 800]
+      "label": "Audit · Delegation",
+      "route": "orthogonal-v",
+      "via": [[1260, 125], [1260, 610]],
+      "labelAt": [1260, 360]
     },
     {
       "id": "middleware-to-redis",
@@ -352,43 +215,9 @@
       "to": "redis",
       "label": "Rate limit · Budget",
       "variant": "dashed",
-      "labelAt": [530, 360]
-    },
-    {
-      "id": "middleware-to-postgres",
-      "from": "middleware-chain",
-      "to": "postgres",
-      "label": "Audit · Delegation",
-      "labelAt": [530, 200]
-    },
-    {
-      "id": "tool-repo-to-postgres",
-      "from": "tool-repo",
-      "to": "postgres",
-      "label": "Tool definitions",
-      "labelAt": [1700, 420]
-    },
-    {
-      "id": "tool-executor-to-postgres",
-      "from": "tool-executor",
-      "to": "postgres",
-      "label": "WASM module store",
-      "labelAt": [1700, 340]
-    },
-    {
-      "id": "router-to-providers",
-      "from": "router",
-      "to": "llm-providers",
-      "label": "Health checks",
-      "labelAt": [1420, 260]
-    },
-    {
-      "id": "middleware-to-guardrails",
-      "from": "middleware-chain",
-      "to": "composite-guardrail",
-      "label": "Content scan",
-      "variant": "security",
-      "labelAt": [1350, 150]
+      "route": "orthogonal-v",
+      "via": [[1260, 125], [1260, 810]],
+      "labelAt": [1260, 470]
     },
     {
       "id": "middleware-to-jwt",
@@ -396,7 +225,28 @@
       "to": "jwt-service",
       "label": "Verify JWT",
       "variant": "security",
-      "labelAt": [1350, 100]
+      "route": "orthogonal-h",
+      "via": [[1260, 125], [2620, 125], [2620, 125]],
+      "labelAt": [2620, 125]
+    },
+    {
+      "id": "middleware-to-guardrails",
+      "from": "middleware-chain",
+      "to": "composite-guardrail",
+      "label": "Content scan",
+      "variant": "security",
+      "route": "orthogonal-h",
+      "via": [[1260, 125], [2620, 125], [2620, 320]],
+      "labelAt": [2620, 220]
+    },
+    {
+      "id": "tool-to-postgres",
+      "from": "tool-executor",
+      "to": "postgres",
+      "label": "WASM modules",
+      "route": "orthogonal-v",
+      "via": [[2510, 515], [2510, 610]],
+      "labelAt": [2510, 560]
     }
   ],
   "cards": [
@@ -406,7 +256,7 @@
       "items": [
         "Chi router with structured middleware chain",
         "Auth → Tenant → Delegation → RateLimit → Audit → Guardrails → HITL",
-        "Each middleware is independently testable"
+        "Each middleware independently testable"
       ]
     },
     {
@@ -415,7 +265,7 @@
       "items": [
         "Fallback chain: circuit breaker + retry + cost-aware routing",
         "Tool loop: bounded iterations, revocation check, hash re-resolution",
-        "HITL gate: approval required for sensitive tool calls",
+        "HITL gate: approval for sensitive tool calls",
         "Cost tracking: pre-estimate + post-actual pricing"
       ]
     },

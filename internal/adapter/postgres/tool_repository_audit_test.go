@@ -34,6 +34,9 @@ func TestToolRepository_AuditAtomicity(t *testing.T) {
 
 	tenantID := domain.MustParseUUID("11111111-1111-1111-1111-111111111111")
 
+	// Ensure test tenant exists (FK requirement for tool_definitions)
+	require.NoError(t, ensureTestTenant(ctx, dbPool, tenantID))
+
 	parameters := json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}}}`)
 	grants := json.RawMessage(`["filesystem:read"]`)
 	timeoutMs := uint64(30000) // 30 seconds in milliseconds (replaces fuel_limit)

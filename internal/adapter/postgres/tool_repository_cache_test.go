@@ -37,6 +37,10 @@ func TestToolRepository_CacheBehavior(t *testing.T) {
 	repo := NewToolRepository(dbPool, auditRepo, logger, cacheTTL, cacheMaxEntries)
 
 	tenantID := domain.MustParseUUID("11111111-1111-1111-1111-111111111111")
+
+	// Ensure test tenant exists (FK requirement for tool_definitions)
+	require.NoError(t, ensureTestTenant(ctx, dbPool, tenantID))
+
 	toolName := "cache_test_tool"
 	description := "Cache test tool"
 	parameters := json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}}}`)
@@ -203,6 +207,11 @@ func TestToolRepository_CacheStructKey(t *testing.T) {
 
 	tenantID1 := domain.MustParseUUID("11111111-1111-1111-1111-111111111111")
 	tenantID2 := domain.MustParseUUID("22222222-2222-2222-2222-222222222222")
+
+	// Ensure test tenants exist (FK requirement for tool_definitions)
+	require.NoError(t, ensureTestTenant(ctx, dbPool, tenantID1))
+	require.NoError(t, ensureTestTenant(ctx, dbPool, tenantID2))
+
 	toolName := "struct_key_test"
 
 	parameters := json.RawMessage(`{"type":"object","properties":{}}`)
@@ -241,6 +250,16 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	return pool
+}
+
+// ensureTestTenant creates the test tenant in the database if it doesn't exist.
+// Required because tool_definitions has FK to tenants table.
+func ensureTestTenant(ctx context.Context, pool *pgxpool.Pool, tenantID domain.UUID) error {
+	_, err := pool.Exec(ctx, `
+		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Test Tenant', 'active')
+		ON CONFLICT (id) DO NOTHING
+	`, uuid.UUID(tenantID))
+	return err
 }
 
 func getTestDSN(t *testing.T) string {
