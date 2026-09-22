@@ -22,7 +22,7 @@ jobs:
         env:
           POSTGRES_DB: agent_gateway
           POSTGRES_USER: gateway
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || 'testpass' }}
         ports: [5432:5432]
         options: >-
           --health-cmd "pg_isready -U gateway -d agent_gateway"
@@ -34,8 +34,8 @@ jobs:
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
     env:
-      DATABASE_URL: postgres://gateway:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/agent_gateway?sslmode=disable
-      TEST_ROLE_PASSWORD: ${{ secrets.TEST_ROLE_PASSWORD }}
+      DATABASE_URL: postgres://gateway:${{ secrets.POSTGRES_PASSWORD || 'testpass' }}@localhost:5432/agent_gateway?sslmode=disable
+      TEST_ROLE_PASSWORD: ${{ secrets.TEST_ROLE_PASSWORD || 'testrolepass' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
