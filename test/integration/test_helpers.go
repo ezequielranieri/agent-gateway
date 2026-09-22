@@ -101,6 +101,16 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	dbPool, err := pgxpool.New(ctx, pgDSN)
 	require.NoError(t, err)
 
+	// Create gateway role (mirrors CI step "Create test role and set test DSN")
+	// This role is referenced by migration 0014_pricing_tables.sql GRANT statements
+	_, err = dbPool.Exec(ctx, `
+		CREATE ROLE gateway WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'gateway';
+		GRANT USAGE ON SCHEMA public TO gateway;
+		GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gateway;
+		GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gateway;
+	`)
+	require.NoError(t, err, "Failed to create gateway role")
+
 	// Increase pool size for concurrent tests
 	dbPool.Config().MaxConns = 50
 

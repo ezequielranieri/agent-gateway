@@ -47,6 +47,18 @@ func setupTestContainer(t *testing.T) (*pgxpool.Pool, *sql.DB, func()) {
 		t.Fatal(err)
 	}
 
+	// Create gateway role (mirrors CI step "Create test role and set test DSN")
+	// This role is referenced by migration 0014_pricing_tables.sql GRANT statements
+	_, err = pool.Exec(ctx, `
+		CREATE ROLE gateway WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'gateway';
+		GRANT USAGE ON SCHEMA public TO gateway;
+		GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gateway;
+		GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gateway;
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create gateway role: %v", err)
+	}
+
 	// Apply migrations using sql.DB (goose requires sql.DB)
 	sqlDB, err := sql.Open("pgx", dsn)
 	if err != nil {
