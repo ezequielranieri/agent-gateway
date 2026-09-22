@@ -143,7 +143,7 @@ func (r *ToolRepository) CreateToolDefinition(ctx context.Context, tenantID doma
 
 		// Emit audit event within the same transaction
 		if r.auditRepo != nil {
-			auditEvent := r.buildAuditEvent(tenantID, def, "CREATE", nil, nil, nil, domain.AuditSeverityInfo)
+			auditEvent := r.buildAuditEvent(tenantID, def, "CREATE", nil, &def.Hash, nil, domain.AuditSeverityInfo)
 			if err := r.auditRepo.AppendWithTx(ctx, tx, auditEvent); err != nil {
 				return err
 			}
