@@ -447,7 +447,7 @@ func (r *ToolRepository) UpsertToolDefinition(ctx context.Context, tenantID doma
 
 		// Emit audit event within the same transaction (info severity for boot seed)
 		if r.auditRepo != nil {
-			auditEvent := r.buildAuditEvent(tenantID, def, "CREATE", nil, &def.Hash, nil, domain.AuditSeverityInfo)
+			auditEvent := r.buildAuditEvent(tenantID, def, "UPSERT", nil, &def.Hash, nil, domain.AuditSeverityInfo)
 			if err := r.auditRepo.AppendWithTx(ctx, tx, auditEvent); err != nil {
 				return err
 			}
@@ -500,7 +500,7 @@ func (r *ToolRepository) InitFromConfig(ctx context.Context, tenantID domain.UUI
 					TenantID: tenantID,
 					Name:     toolConfig.Name,
 					Hash:     hash,
-				}, "CREATE", nil, &hash, nil, domain.AuditSeverityInfo)
+				}, "UPSERT", nil, &hash, nil, domain.AuditSeverityInfo)
 				if err := r.auditRepo.AppendWithTx(ctx, tx, auditEvent); err != nil {
 					return err
 				}
