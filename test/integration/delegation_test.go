@@ -19,14 +19,6 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 )
 
-	for _, m := range migrations {
-		if _, err := dbPool.Exec(ctx, m); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // TestDelegationIntegration tests the full delegation chain lifecycle.
 // Requires Docker (testcontainers). Skipped in -short mode.
 func TestDelegationIntegration(t *testing.T) {
