@@ -1,9 +1,12 @@
+//go:build integration
+
 package postgres
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -50,11 +53,12 @@ func setupTestContainer(t *testing.T) (*pgxpool.Pool, *sql.DB, func()) {
 		t.Fatal(err)
 	}
 
-	// Get absolute path to migrations directory
-	migrationsPath, err := filepath.Abs(filepath.Join("..", "..", "..", "migrations"))
+	// Get absolute path to migrations directory - find repo root
+	repoRoot, err := findRepoRoot()
 	if err != nil {
-		t.Fatalf("Failed to get migrations path: %v", err)
+		t.Fatalf("Failed to find repo root: %v", err)
 	}
+	migrationsPath := filepath.Join(repoRoot, "migrations")
 
 	// Apply migrations
 	goose.SetBaseFS(nil)
@@ -69,6 +73,28 @@ func setupTestContainer(t *testing.T) (*pgxpool.Pool, *sql.DB, func()) {
 	}
 
 	return pool, sqlDB, cleanup
+}
+
+// findRepoRoot finds the repository root by looking for the migrations directory
+func findRepoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+
+	// Walk up the directory tree looking for migrations directory
+	for {
+		migrationsPath := filepath.Join(dir, "migrations")
+		if _, err := os.Stat(migrationsPath); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // reached root
+		}
+		dir = parent
+	}
+	return "", fmt.Errorf("could not find migrations directory")
 }
 
 func TestPostgresContainerSetup(t *testing.T) {
