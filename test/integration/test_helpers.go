@@ -126,9 +126,9 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 
 	// Create test role (gateway_test) matching CI - NOSUPERUSER NOBYPASSRLS
 	// Use same password as CI workflow for consistency
-	testRolePassword := "testrolepass"
+	const testRolePassword = "testrolepass"
 	_, err = adminPool.Exec(ctx, `
-		CREATE ROLE gateway_test WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'testrolepass';
+		CREATE ROLE gateway_test WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '` + testRolePassword + `';
 		GRANT USAGE ON SCHEMA public TO gateway_test;
 		GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gateway_test;
 		GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gateway_test;
@@ -139,7 +139,7 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	adminPool.Close()
 
 	// Build DSN for test role
-	testDSN := strings.Replace(pgDSN, "postgres:postgres", "gateway_test:testrolepass", 1)
+	testDSN := strings.Replace(pgDSN, "postgres:postgres", "gateway_test:"+testRolePassword, 1)
 	dbPool, err := pgxpool.New(ctx, testDSN)
 	require.NoError(t, err)
 
