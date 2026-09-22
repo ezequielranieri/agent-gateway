@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,22 +98,19 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	require.NoError(t, err)
 	redisAddr := redisEndpoint
 
-	// Connect to PostgreSQL
-	dbPool, err := pgxpool.New(ctx, pgDSN)
+	// Connect to PostgreSQL as superuser (postgres) for setup
+	adminPool, err := pgxpool.New(ctx, pgDSN)
 	require.NoError(t, err)
 
 	// Create gateway role (mirrors CI step "Create test role and set test DSN")
 	// This role is referenced by migration 0014_pricing_tables.sql GRANT statements
-	_, err = dbPool.Exec(ctx, `
+	_, err = adminPool.Exec(ctx, `
 		CREATE ROLE gateway WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'gateway';
 		GRANT USAGE ON SCHEMA public TO gateway;
 		GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gateway;
 		GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gateway;
 	`)
 	require.NoError(t, err, "Failed to create gateway role")
-
-	// Increase pool size for concurrent tests
-	dbPool.Config().MaxConns = 50
 
 	// Run goose migrations to create schema and goose_db_version table
 	migrationsPath, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
@@ -125,6 +123,28 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 
 	err = goose.UpContext(ctx, sqlDB, migrationsPath)
 	require.NoError(t, err, "goose migrations failed")
+
+	// Create test role (gateway_test) matching CI - NOSUPERUSER NOBYPASSRLS
+	// Use same password as CI workflow for consistency
+	testRolePassword := "testrolepass"
+	_, err = adminPool.Exec(ctx, `
+		CREATE ROLE gateway_test WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'testrolepass';
+		GRANT USAGE ON SCHEMA public TO gateway_test;
+		GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gateway_test;
+		GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gateway_test;
+	`)
+	require.NoError(t, err, "Failed to create gateway_test role")
+
+	// Close admin pool and connect as test role for actual tests
+	adminPool.Close()
+
+	// Build DSN for test role
+	testDSN := strings.Replace(pgDSN, "postgres:postgres", "gateway_test:testrolepass", 1)
+	dbPool, err := pgxpool.New(ctx, testDSN)
+	require.NoError(t, err)
+
+	// Increase pool size for concurrent tests
+	dbPool.Config().MaxConns = 50
 
 	// Verify test role is NOSUPERUSER NOBYPASSRLS
 	checkTestRole(t, dbPool)
