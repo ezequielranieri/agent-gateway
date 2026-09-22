@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,7 +38,7 @@ func TestDelegationIntegration(t *testing.T) {
 
 	// Create test tenant
 	tenantID := domain.NewUUID()
-	_, err = tc.DBPool.Exec(tc.Ctx, `
+	_, err := tc.DBPool.Exec(tc.Ctx, `
 		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Delegation Test Tenant', 'active')
 		ON CONFLICT (id) DO NOTHING
 	`, tenantID)
@@ -285,7 +284,7 @@ func TestDelegationMiddlewareValidation(t *testing.T) {
 
 	// Create test tenant
 	tenantID := domain.NewUUID()
-	_, err = tc.DBPool.Exec(tc.Ctx, `
+	_, err := tc.DBPool.Exec(tc.Ctx, `
 		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'MW Test Tenant', 'active')
 		ON CONFLICT (id) DO NOTHING
 	`, tenantID)
