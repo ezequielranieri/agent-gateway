@@ -405,14 +405,3 @@ t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		assert.True(t, result.Valid)
 	})
 }
-			}
-			return nil
-		})
-		require.NoError(t, err)
-
-		// Verify chain integrity
-		result, err := auditRepo.VerifyChain(ctx, tenantID, 1, 100)
-		require.NoError(t, err)
-		assert.True(t, result.Valid)
-	})
-}
