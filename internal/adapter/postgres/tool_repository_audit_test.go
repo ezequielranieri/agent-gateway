@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -355,6 +356,82 @@ t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		// TODO: This test is skipped due to a known issue in VerifyChainInput
 		// (chain_hash verification fails on genesis event).
 		// The core RLS fixes work correctly - all CRUD audit tests pass.
-		t.Skip("Skipping due to known issue in VerifyChainInput - chain_hash verification fails on genesis event. Core RLS fixes work correctly.")
+		t.Skip("Skipping: CreatedAt generated before advisory lock causes hash_CreatedAt <> stored_created_at (diff_us -235..-17155) in same-tx concurrent updates; fixed in #2 by row lock with CreatedAt after lock")
+
+		// Test that sequential tool operations maintain audit chain integrity
+		// Use a unique tenant to isolate from other test runs
+		chainTenantID := domain.NewUUID()
+		require.NoError(t, ensureTestTenant(ctx, dbPool, chainTenantID))
+
+		toolName := "concurrent_chain_tool"
+		description := "Concurrent chain test"
+		hash := tool.ComputeHash(toolName, description, parameters)
+
+		// Create tool
+		err := repo.CreateToolDefinition(ctx, chainTenantID, &tool.ToolDefinition{
+			TenantID:             chainTenantID,
+			Name:                 toolName,
+			Description:          description,
+			InputSchema:          parameters,
+			Grants:               grants,
+			ExecutionTimeoutMs:   timeoutMs,
+			MemoryPages:          memoryPages,
+			Hash:                 hash,
+			IsActive:             true,
+		})
+		require.NoError(t, err)
+
+		// Debug: check initial audit event
+		initEvents, err := auditRepo.Query(ctx, AuditFilter{TenantID: chainTenantID, Limit: 10})
+		require.NoError(t, err)
+		t.Logf("After CREATE: %d events", len(initEvents))
+		for _, e := range initEvents {
+			t.Logf("  seq=%d action=%s prev_hash=%x chain_hash=%x",
+				e.Seq, e.Action, e.PrevHash[:8], e.ChainHash[:8])
+		}
+
+		// Run all updates in a single transaction to ensure advisory lock serialization
+		err = WithTenantTx(ctx, dbPool, chainTenantID, func(ctx context.Context, tx pgx.Tx) error {
+			for i := 0; i < 5; i++ {
+				newDesc := description + " v" + string(rune('1'+i))
+				newHash := tool.ComputeHash(toolName, newDesc, parameters)
+
+				_, err := repo.UpdateToolDefinitionTx(ctx, tx, chainTenantID, &tool.ToolDefinition{
+					TenantID:             chainTenantID,
+					Name:                 toolName,
+					Description:          newDesc,
+					InputSchema:          parameters,
+					Grants:               grants,
+					ExecutionTimeoutMs:   timeoutMs,
+					MemoryPages:          memoryPages,
+					Hash:                 newHash,
+					IsActive:             true,
+				})
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Debug: inspect chain after all updates
+		debugEvents, err := auditRepo.Query(ctx, AuditFilter{TenantID: chainTenantID, Limit: 20})
+		require.NoError(t, err)
+		t.Logf("Chain events after updates (count=%d):", len(debugEvents))
+		for _, e := range debugEvents {
+			t.Logf("  seq=%d action=%s prev_hash=%x chain_hash=%x",
+				e.Seq, e.Action, e.PrevHash[:8], e.ChainHash[:8])
+		}
+
+		// Verify chain integrity for this tenant only (should have 6 events: 1 CREATE + 5 UPDATE)
+		result, err := auditRepo.VerifyChain(ctx, chainTenantID, 1, 6)
+		require.NoError(t, err)
+		if !result.Valid {
+			t.Logf("Chain verification failed: broken_seq=%d error=%v total_seen=%d",
+				result.BrokenSeq, result.Error, result.TotalSeen)
+		}
+		assert.True(t, result.Valid, "chain should be valid: broken_seq=%d error=%v total_seen=%d",
+			result.BrokenSeq, result.Error, result.TotalSeen)
 	})
 }
