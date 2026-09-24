@@ -356,7 +356,7 @@ t.Run("Concurrent hash chain integrity", func(t *testing.T) {
 		// TODO: This test is skipped due to a known issue in VerifyChainInput
 		// (chain_hash verification fails on genesis event).
 		// The core RLS fixes work correctly - all CRUD audit tests pass.
-		t.Skip("Skipping: CreatedAt generated before advisory lock causes hash_CreatedAt <> stored_created_at (diff_us -235..-17155) in same-tx concurrent updates; fixed in #2 by row lock with CreatedAt after lock")
+		// t.Skip("Skipping: CreatedAt generated before advisory lock causes hash_CreatedAt <> stored_created_at (diff_us -235..-17155) in same-tx concurrent updates; fixed in #2 by row lock with CreatedAt after lock")
 
 		// Test that sequential tool operations maintain audit chain integrity
 		// Use a unique tenant to isolate from other test runs
