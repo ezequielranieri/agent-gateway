@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ezequielranieri/agent-gateway/internal/adapter/tool/wazero"
+	"github.com/ezequielranieri/agent-gateway/internal/domain"
 	"github.com/ezequielranieri/agent-gateway/internal/domain/model"
 	"github.com/ezequielranieri/agent-gateway/internal/domain/tool"
 	"github.com/rs/zerolog"
@@ -18,6 +20,7 @@ type ChatUsecaseConfig struct {
 	MaxIterations     int
 	ToolExecutor      tool.ToolExecutor
 	ToolConfig        *tool.ToolConfig
+	ToolRepository    tool.ToolRepository
 }
 
 // ChatUsecase orchestrates the chat completion flow: pre-estimate -> route -> post-actual
@@ -27,20 +30,23 @@ type ChatUsecase struct {
 	router          *Router
 	toolExecutor    tool.ToolExecutor
 	toolConfig      *tool.ToolConfig
+	toolRepo        tool.ToolRepository
 	config          ChatUsecaseConfig
 	logger          zerolog.Logger
 }
 
 // ChatRequest is the usecase-level chat request
 type ChatRequest struct {
-	Model       string
-	Messages    []model.Message
-	Temperature *float64
-	MaxTokens   *int
-	Stream      bool
-	Tools       []model.Tool
-	ToolChoice  any
-	User        string
+	Model           string
+	Messages        []model.Message
+	Temperature     *float64
+	MaxTokens       *int
+	Stream          bool
+	Tools           []model.Tool
+	ValidatedTools  []wazero.ValidatedTool
+	ToolChoice      any
+	User            string
+	TenantID        domain.UUID
 }
 
 // ChatResponse is the usecase-level chat response
@@ -60,6 +66,7 @@ func NewChatUsecase(
 	router *Router,
 	toolExecutor tool.ToolExecutor,
 	toolConfig *tool.ToolConfig,
+	toolRepo tool.ToolRepository,
 	config ChatUsecaseConfig,
 	logger zerolog.Logger,
 ) *ChatUsecase {
@@ -76,6 +83,7 @@ func NewChatUsecase(
 		router:          router,
 		toolExecutor:    toolExecutor,
 		toolConfig:      toolConfig,
+		toolRepo:        toolRepo,
 		config:          config,
 		logger:          logger.With().Str("component", "chat_usecase").Logger(),
 	}
@@ -123,8 +131,8 @@ func (uc *ChatUsecase) Complete(ctx context.Context, req ChatRequest) (ChatRespo
 		return ChatResponse{}, err
 	}
 	
-	// Execute tool loop if there are tool calls
-	finalResult, err := uc.executeToolLoop(ctx, domainReq, result)
+	// Execute tool loop if there are tool calls (pass original request with ValidatedTools and TenantID)
+	finalResult, err := uc.executeToolLoop(ctx, req, domainReq, result)
 	if err != nil {
 		uc.logger.Error().
 			Err(err).
@@ -183,7 +191,8 @@ func (uc *ChatUsecase) calculateActualCost(ctx context.Context, completion model
 // executeToolLoop executes tool calls in a bounded loop
 func (uc *ChatUsecase) executeToolLoop(
 	ctx context.Context,
-	req model.ChatRequest,
+	req ChatRequest,
+	domainReq model.ChatRequest,
 	result FallbackResult,
 ) (FallbackResult, error) {
 	if uc.toolExecutor == nil || uc.toolConfig == nil {
@@ -198,6 +207,13 @@ func (uc *ChatUsecase) executeToolLoop(
 
 	currentResult := result
 	iterations := 0
+
+	// Build authorized tool set from validated tools (immutable per request)
+	authorizedTools := make(map[string]*wazero.ValidatedTool)
+	for i := range req.ValidatedTools {
+		vt := &req.ValidatedTools[i]
+		authorizedTools[vt.Name] = vt
+	}
 
 	for iterations < maxIterations {
 		// Check for tool calls in the response
@@ -220,9 +236,55 @@ func (uc *ChatUsecase) executeToolLoop(
 		// Execute each tool call
 		var toolResults []tool.ToolResult
 		for _, tc := range toolCalls {
+			// REVOCATION CHECK: Model requests tool not in authorized set -> reject
+			vt, ok := authorizedTools[tc.Function.Name]
+			if !ok {
+				uc.logger.Error().
+					Str("tool", tc.Function.Name).
+					Msg("Tool call rejected: not in authorized set (revocation)")
+				toolResults = append(toolResults, tool.ToolResult{
+					CallID: tc.ID,
+					Error:  tool.ErrToolNotFound.Error(),
+				})
+				continue
+			}
+
+			// RE-RESOLVE AT EXECUTION: Lookup (tenant, name) + verify hash matches
+			if uc.toolRepo != nil {
+				def, err := uc.toolRepo.GetByName(ctx, req.TenantID, tc.Function.Name)
+				if err != nil {
+					uc.logger.Error().Err(err).Str("tool", tc.Function.Name).Msg("Re-resolution failed")
+					toolResults = append(toolResults, tool.ToolResult{
+						CallID: tc.ID,
+						Error:  tool.ErrToolNotFound.Error(),
+					})
+					continue
+				}
+				if def.Hash != vt.Hash {
+					uc.logger.Error().
+						Str("tool", tc.Function.Name).
+						Str("expected_hash", vt.Hash).
+						Str("actual_hash", def.Hash).
+						Msg("Tool definition hash mismatch on re-resolution")
+					toolResults = append(toolResults, tool.ToolResult{
+						CallID: tc.ID,
+						Error:  tool.ErrToolDefinitionMismatch.Error(),
+					})
+					continue
+				}
+				if !def.IsActive {
+					uc.logger.Error().Str("tool", tc.Function.Name).Msg("Tool deactivated during request")
+					toolResults = append(toolResults, tool.ToolResult{
+						CallID: tc.ID,
+						Error:  tool.ErrToolNotFound.Error(),
+					})
+					continue
+				}
+			}
+
 			// Check HITL gate
 			if uc.toolRequiresApproval(tc.Function.Name) {
-approved, err := uc.requestHITLApproval(ctx, tc)
+				approved, err := uc.requestHITLApproval(ctx, tc)
 				if err != nil || !approved {
 					toolResults = append(toolResults, tool.ToolResult{
 						CallID: tc.ID,
@@ -232,41 +294,44 @@ approved, err := uc.requestHITLApproval(ctx, tc)
 				}
 			}
 
-// Execute tool
-		call := tool.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: parseArguments(tc.Function.Arguments),
-		}
-
-		var toolResult tool.ToolResult
-		var execErr error
-		toolResult, execErr = uc.toolExecutor.Execute(ctx, call)
-		if execErr != nil {
-			uc.logger.Error().
-				Err(execErr).
-				Str("tool", tc.Function.Name).
-				Msg("Tool execution failed")
-			toolResult = tool.ToolResult{
-				CallID:   call.ID,
-				Error:    execErr.Error(),
-				Duration: 0,
+			// Execute tool
+			call := tool.ToolCall{
+				ID:        tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: parseArguments(tc.Function.Arguments),
 			}
+
+			// Pass validated tool to executor via context for resource limits
+			execCtx := wazero.WithValidatedTool(ctx, vt)
+
+			var toolResult tool.ToolResult
+			var execErr error
+			toolResult, execErr = uc.toolExecutor.Execute(execCtx, call)
+			if execErr != nil {
+				uc.logger.Error().
+					Err(execErr).
+					Str("tool", tc.Function.Name).
+					Msg("Tool execution failed")
+				toolResult = tool.ToolResult{
+					CallID:   call.ID,
+					Error:    execErr.Error(),
+					Duration: 0,
+				}
+			}
+
+			// Record per-step: cost, audit, rate-limit
+			uc.recordToolStep(ctx, toolResult, tc)
+
+			toolResults = append(toolResults, toolResult)
 		}
 
-		// Record per-step: cost, audit, rate-limit
-		uc.recordToolStep(ctx, toolResult, tc)
-
-		toolResults = append(toolResults, toolResult)
+		// Feed results back and make next call
+		var feedErr error
+		currentResult, feedErr = uc.feedToolResultsAndRecall(ctx, domainReq, currentResult, toolResults)
+		if feedErr != nil {
+			return FallbackResult{}, fmt.Errorf("feed tool results: %w", feedErr)
+		}
 	}
-
-	// Feed results back and make next call
-	var feedErr error
-	currentResult, feedErr = uc.feedToolResultsAndRecall(ctx, req, currentResult, toolResults)
-	if feedErr != nil {
-		return FallbackResult{}, fmt.Errorf("feed tool results: %w", feedErr)
-	}
-}
 
 	if iterations >= maxIterations {
 		uc.logger.Warn().
@@ -279,6 +344,16 @@ approved, err := uc.requestHITLApproval(ctx, tc)
 	}
 
 	return currentResult, nil
+}
+
+// ExecuteToolLoopForTest exposes executeToolLoop for unit testing
+func (uc *ChatUsecase) ExecuteToolLoopForTest(
+	ctx context.Context,
+	req ChatRequest,
+	domainReq model.ChatRequest,
+	result FallbackResult,
+) (FallbackResult, error) {
+	return uc.executeToolLoop(ctx, req, domainReq, result)
 }
 
 // toolRequiresApproval checks if a tool requires HITL approval
@@ -386,20 +461,48 @@ func BuildChatUsecaseFromConfig(
 	cfg model.RouterConfig,
 	toolCfg *tool.ToolConfig,
 	toolExecutor tool.ToolExecutor,
+	toolRepo tool.ToolRepository,
 	pricing model.PricingService,
 	logger zerolog.Logger,
 ) (*ChatUsecase, error) {
-	// Build registry
-	registry, err := BuildRegistryFromConfig(ctx, cfg, logger)
-	if err != nil {
-		return nil, fmt.Errorf("build registry: %w", err)
+	return BuildChatUsecaseFromConfigWithProvider(ctx, cfg, toolCfg, toolExecutor, toolRepo, pricing, logger, nil)
+}
+
+// BuildChatUsecaseFromConfigWithProvider creates a fully configured ChatUsecase from config
+// If provider is not nil, it's used instead of building from config (for testing)
+func BuildChatUsecaseFromConfigWithProvider(
+	ctx context.Context,
+	cfg model.RouterConfig,
+	toolCfg *tool.ToolConfig,
+	toolExecutor tool.ToolExecutor,
+	toolRepo tool.ToolRepository,
+	pricing model.PricingService,
+	logger zerolog.Logger,
+	provider model.ModelProvider,
+) (*ChatUsecase, error) {
+	var registry *ProviderRegistry
+	var router *Router
+	var fallbackChain *FallbackChain
+	
+	if provider != nil {
+		// Use provided provider directly (for testing)
+		registry = NewProviderRegistry(logger)
+		// Create a fake provider config to register
+		fakePC := model.ProviderConfig{Name: "test", Models: []string{"test-model"}, Enabled: true}
+		registry.Register(fakePC, provider)
+		router = NewRouter(registry, logger)
+		fallbackChain = NewFallbackChain(router, pricing, cfg, logger)
+	} else {
+		// Build from config (production)
+		var err error
+		registry, err = BuildRegistryFromConfig(ctx, cfg, logger)
+		if err != nil {
+			return nil, fmt.Errorf("build registry: %w", err)
+		}
+		
+		router = NewRouter(registry, logger)
+		fallbackChain = NewFallbackChain(router, pricing, cfg, logger)
 	}
-	
-	// Create router
-	router := NewRouter(registry, logger)
-	
-	// Create fallback chain
-	fallbackChain := NewFallbackChain(router, pricing, cfg, logger)
 	
 	// Create usecase
 	usecase := NewChatUsecase(
@@ -408,18 +511,22 @@ func BuildChatUsecaseFromConfig(
 		router,
 		toolExecutor,
 		toolCfg,
+		toolRepo,
 		ChatUsecaseConfig{
-			DefaultTimeout:    cfg.DefaultTimeout,
+			DefaultTimeout:     cfg.DefaultTimeout,
 			EnableCostTracking: true,
-			MaxIterations:     toolCfg.MaxIterations,
-			ToolExecutor:      toolExecutor,
-			ToolConfig:        toolCfg,
+			MaxIterations:      toolCfg.MaxIterations,
+			ToolExecutor:       toolExecutor,
+			ToolConfig:         toolCfg,
+			ToolRepository:     toolRepo,
 		},
 		logger,
 	)
 	
-	// Start periodic health checks
-	registry.StartPeriodicHealthChecks(ctx, 30*time.Second)
+	// Start periodic health checks only if built from config
+	if provider == nil {
+		registry.StartPeriodicHealthChecks(ctx, 30*time.Second)
+	}
 	
 	return usecase, nil
 }

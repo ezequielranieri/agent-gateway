@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,57 +18,6 @@ import (
 	"github.com/ezequielranieri/agent-gateway/internal/middleware"
 )
 
-// applyDelegationMigrations applies migrations 0015-0017 on top of the base schema.
-func applyDelegationMigrations(ctx context.Context, dbPool *pgxpool.Pool) error {
-	migrations := []string{
-		// 0015_delegation_grants
-		`CREATE TABLE IF NOT EXISTS public.delegation_grants (
-			id                    uuid NOT NULL DEFAULT gen_random_uuid(),
-			tenant_id             uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
-			parent_grant_id       uuid,
-			chain_id              uuid NOT NULL,
-			delegate_identity     text NOT NULL,
-			granted_scope         jsonb NOT NULL,
-			root_intent           text NOT NULL,
-			hitl_classification   text NOT NULL DEFAULT 'none' CHECK (hitl_classification IN ('none', 'optional', 'required')),
-			depth                 integer NOT NULL DEFAULT 0 CHECK (depth >= 0),
-			expires_at            timestamptz NOT NULL,
-			budget_remaining      integer NOT NULL DEFAULT 1000 CHECK (budget_remaining >= 0),
-			status                text NOT NULL DEFAULT 'issued' CHECK (status IN ('issued', 'active', 'revoked', 'expired', 'consumed')),
-			created_at            timestamptz NOT NULL DEFAULT now(),
-			updated_at            timestamptz NOT NULL DEFAULT now(),
-			PRIMARY KEY (id, tenant_id)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_delegation_grants_chain ON public.delegation_grants (tenant_id, chain_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_delegation_grants_delegate ON public.delegation_grants (tenant_id, delegate_identity, status)`,
-		`CREATE INDEX IF NOT EXISTS idx_delegation_grants_parent ON public.delegation_grants (tenant_id, parent_grant_id) WHERE parent_grant_id IS NOT NULL`,
-		`CREATE INDEX IF NOT EXISTS idx_delegation_grants_expires ON public.delegation_grants (tenant_id, expires_at) WHERE status IN ('issued', 'active')`,
-		`ALTER TABLE public.delegation_grants ENABLE ROW LEVEL SECURITY`,
-		`ALTER TABLE public.delegation_grants FORCE ROW LEVEL SECURITY`,
-		`CREATE POLICY delegation_grants_tenant_isolation ON public.delegation_grants
-			USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-			WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid)`,
-
-		// 0016_audit_chain_columns
-		`ALTER TABLE public.audit_events
-			ADD COLUMN IF NOT EXISTS chain_id uuid DEFAULT NULL,
-			ADD COLUMN IF NOT EXISTS parent_event_id uuid DEFAULT NULL`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_events_chain ON public.audit_events (tenant_id, chain_id) WHERE chain_id IS NOT NULL`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_events_parent_event ON public.audit_events (tenant_id, parent_event_id) WHERE parent_event_id IS NOT NULL`,
-
-		// 0017_delegation_grants_generation
-		`ALTER TABLE public.delegation_grants
-			ADD COLUMN IF NOT EXISTS generation integer NOT NULL DEFAULT 0`,
-	}
-
-	for _, m := range migrations {
-		if _, err := dbPool.Exec(ctx, m); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // TestDelegationIntegration tests the full delegation chain lifecycle.
 // Requires Docker (testcontainers). Skipped in -short mode.
 func TestDelegationIntegration(t *testing.T) {
@@ -79,10 +27,6 @@ func TestDelegationIntegration(t *testing.T) {
 
 	tc := SetupTestContainers(t)
 	defer tc.Teardown(t)
-
-	// Apply delegation-specific migrations
-	err := applyDelegationMigrations(tc.Ctx, tc.DBPool)
-	require.NoError(t, err, "Delegation migrations must apply cleanly")
 
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: zerolog.NewTestWriter(t)}).
 		Level(zerolog.DebugLevel).
@@ -94,7 +38,7 @@ func TestDelegationIntegration(t *testing.T) {
 
 	// Create test tenant
 	tenantID := domain.NewUUID()
-	_, err = tc.DBPool.Exec(tc.Ctx, `
+	_, err := tc.DBPool.Exec(tc.Ctx, `
 		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Delegation Test Tenant', 'active')
 		ON CONFLICT (id) DO NOTHING
 	`, tenantID)
@@ -322,9 +266,6 @@ func TestDelegationMiddlewareValidation(t *testing.T) {
 	tc := SetupTestContainers(t)
 	defer tc.Teardown(t)
 
-	err := applyDelegationMigrations(tc.Ctx, tc.DBPool)
-	require.NoError(t, err)
-
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: zerolog.NewTestWriter(t)}).
 		Level(zerolog.DebugLevel).
 		With().Str("test", "delegation-mw").Logger()
@@ -343,7 +284,7 @@ func TestDelegationMiddlewareValidation(t *testing.T) {
 
 	// Create test tenant
 	tenantID := domain.NewUUID()
-	_, err = tc.DBPool.Exec(tc.Ctx, `
+	_, err := tc.DBPool.Exec(tc.Ctx, `
 		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'MW Test Tenant', 'active')
 		ON CONFLICT (id) DO NOTHING
 	`, tenantID)

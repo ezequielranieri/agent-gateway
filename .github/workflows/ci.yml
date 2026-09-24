@@ -22,7 +22,7 @@ jobs:
         env:
           POSTGRES_DB: agent_gateway
           POSTGRES_USER: gateway
-          POSTGRES_PASSWORD: gateway
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || 'testpass' }}
         ports: [5432:5432]
         options: >-
           --health-cmd "pg_isready -U gateway -d agent_gateway"
@@ -34,25 +34,81 @@ jobs:
         ports: [6379:6379]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 5
     env:
-      DATABASE_URL: postgres://gateway:gateway@localhost:5432/agent_gateway?sslmode=disable
+      DATABASE_URL: postgres://gateway:${{ secrets.POSTGRES_PASSWORD || 'testpass' }}@localhost:5432/agent_gateway?sslmode=disable
+      TEST_ROLE_PASSWORD: ${{ secrets.TEST_ROLE_PASSWORD || 'testrolepass' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      - name: Check for disabled test files
+        run: |
+          if find . -name "*.disabled" -type f | grep -q .; then
+            echo "ERROR: Found disabled test files:"
+            find . -name "*.disabled" -type f
+            echo "All tests must be enabled. Remove .disabled suffix or delete the file."
+            exit 1
+          fi
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
       - name: Install sqlc
         run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@v3.25.0
       - name: Generate sqlc code
         run: sqlc generate
       - name: Run migrations
         run: |
-          go install github.com/pressly/goose/v3/cmd/goose@latest
           goose -dir migrations postgres "$DATABASE_URL" up
+      - name: Create test role and set test DSN
+        run: |
+          psql "$DATABASE_URL" -c "CREATE ROLE gateway_test WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${{ env.TEST_ROLE_PASSWORD }}';"
+          psql "$DATABASE_URL" -c "GRANT USAGE ON SCHEMA public TO gateway_test;"
+          psql "$DATABASE_URL" -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gateway_test;"
+          psql "$DATABASE_URL" -c "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gateway_test;"
+      - name: Verify test role
+        run: |
+          psql "postgres://gateway_test:${{ env.TEST_ROLE_PASSWORD }}@localhost:5432/agent_gateway?sslmode=disable" -c "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;"
       - name: Run unit tests
-        run: go test -count=1 ./internal/...
-      - name: Run delegation integration tests
-        run: go test -count=1 -run 'Delegation' ./test/integration/
+        run: go test -tags=unit -count=1 ./internal/...
+        env:
+          TEST_DATABASE_URL: postgres://gateway_test:${{ env.TEST_ROLE_PASSWORD }}@localhost:5432/agent_gateway?sslmode=disable
+      - name: Run integration tests
+        run: go test -tags integration -count=1 -v ./...
+        env:
+          TEST_DATABASE_URL: postgres://gateway_test:${{ env.TEST_ROLE_PASSWORD }}@localhost:5432/agent_gateway?sslmode=disable
+      - name: Check for SKIP in test output
+        run: |
+          # This step runs integration tests again to check for SKIP
+          # If any test is SKIPped, fail the build (except allowlisted skips)
+          output=$(go test -tags integration -count=1 -v ./... 2>&1 || true)
+          echo "$output"
+          # Allowlist: only these patterns are allowed to SKIP
+          allowed_skips=("Skipping integration test in short mode")
+          skip_found=false
+          while IFS= read -r line; do
+            if echo "$line" | grep -q "--- SKIP"; then
+              allowed=false
+              for pattern in "${allowed_skips[@]}"; do
+                if echo "$line" | grep -q "$pattern"; then
+                  allowed=true
+                  break
+                fi
+              done
+              if [ "$allowed" = false ]; then
+                echo "ERROR: Unexpected SKIP found: $line"
+                skip_found=true
+              fi
+            fi
+          done <<< "$output"
+          if [ "$skip_found" = true ]; then
+            exit 1
+          fi
+        env:
+          TEST_DATABASE_URL: postgres://gateway_test:${{ env.TEST_ROLE_PASSWORD }}@localhost:5432/agent_gateway?sslmode=disable
 
   build:
     name: Build & Push Docker Image

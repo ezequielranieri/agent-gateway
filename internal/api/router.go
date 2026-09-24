@@ -29,6 +29,7 @@ type RouterConfig struct {
 	ReviewHandlers         *handlers.ReviewHandlers
 	ChatHandlers           *handlers.ChatHandlers
 	AdminAuditHandlers     *handlers.AdminAuditHandlers
+	AdminToolsHandler      *handlers.AdminToolsHandler
 	AdminTenantsHandler    *handlers.AdminTenantsHandler
 	AdminUsersHandler      *handlers.AdminUsersHandler
 	AdminRolesHandler      *handlers.AdminRolesHandler
@@ -131,12 +132,17 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				// Admin-only: revoke user sessions
 				r.Post("/users/{id}/revoke-sessions", cfg.AuthHandlers.RevokeUserSessions)
 
-				// Audit routes
-				if cfg.AdminAuditHandlers != nil {
-					r.Get("/audit", cfg.AdminAuditHandlers.ListAuditEvents)
-					r.Post("/audit/verify-chain", cfg.AdminAuditHandlers.VerifyChain)
-				}
-			})
+// Audit routes
+			if cfg.AdminAuditHandlers != nil {
+				r.Get("/audit", cfg.AdminAuditHandlers.ListAuditEvents)
+				r.Post("/audit/verify-chain", cfg.AdminAuditHandlers.VerifyChain)
+			}
+
+			// Admin tools routes
+			if cfg.AdminToolsHandler != nil {
+				cfg.AdminToolsHandler.RegisterRoutes(r)
+			}
+		})
 		})
 
 		// Review routes (HITL) - require full middleware chain

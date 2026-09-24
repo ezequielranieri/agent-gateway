@@ -401,3 +401,102 @@ func TestChainHashComputation(t *testing.T) {
 	event.Payload = json.RawMessage(`{"test":false}`)
 	assert.False(t, event.VerifyChainInput(), "Chain hash verification should fail after tampering")
 }
+
+// TestConcurrentAuditAppends tests that concurrent appends to the same tenant
+// are properly serialized by the advisory lock, producing contiguous seq numbers
+// and a valid hash chain.
+func TestConcurrentAuditAppends(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	tc := SetupTestContainers(t)
+	defer tc.Teardown(t)
+
+	ctx := tc.Ctx
+	dbPool := tc.DBPool
+
+	// Create tenant
+	tenantID := domain.NewUUID()
+	userID := domain.NewUUID()
+	_, err := dbPool.Exec(ctx, `
+		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Test Tenant', 'active')
+		ON CONFLICT (id) DO NOTHING
+	`, tenantID)
+	require.NoError(t, err)
+
+	logger := zerolog.New(zerolog.ConsoleWriter{Out: zerolog.NewTestWriter(t)}).
+		Level(zerolog.DebugLevel).
+		With().Str("test", "concurrent_audit").Logger()
+
+	auditRepo := pgadapter.NewAuditRepository(dbPool)
+
+	const numGoroutines = 20
+	const eventsPerGoroutine = 5
+	const totalEvents = numGoroutines * eventsPerGoroutine
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, numGoroutines)
+
+	// Launch concurrent appends
+	for g := 0; g < numGoroutines; g++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for i := 0; i < eventsPerGoroutine; i++ {
+				event := &domain.AuditEvent{
+					TenantID:    tenantID,
+					ActorUserID: &userID,
+					Action:      fmt.Sprintf("concurrent.test.g%d", goroutineID),
+					EntityType:  "concurrent_test",
+					Severity:    domain.AuditSeverityInfo,
+					CreatedAt:   time.Now(),
+					Payload:     json.RawMessage(fmt.Sprintf(`{"goroutine":%d, "index":%d}`, goroutineID, i)),
+				}
+				if err := auditRepo.Append(ctx, event); err != nil {
+					errChan <- fmt.Errorf("goroutine %d event %d: %w", goroutineID, i, err)
+					return
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Check for any errors
+	for err := range errChan {
+		require.NoError(t, err)
+	}
+
+	// Verify chain integrity and contiguous sequence
+	result, err := auditRepo.VerifyChain(ctx, tenantID, 1, int64(totalEvents))
+	require.NoError(t, err)
+	assert.True(t, result.Valid, "Chain should be valid after concurrent appends")
+	assert.Equal(t, int64(totalEvents), result.TotalSeen, "All events should be present")
+
+	// Verify sequence is contiguous (no gaps)
+	events, err := auditRepo.Query(ctx, pgadapter.AuditFilter{
+		TenantID:  tenantID,
+		Limit:     totalEvents,
+		Offset:    0,
+	})
+	require.NoError(t, err)
+	require.Equal(t, totalEvents, len(events))
+
+	for i, e := range events {
+		expectedSeq := int64(i + 1)
+		assert.Equal(t, expectedSeq, e.Seq, "Event %d should have seq %d, got %d", i, expectedSeq, e.Seq)
+	}
+
+	// Verify all events belong to our tenant
+	for _, e := range events {
+		assert.Equal(t, tenantID, e.TenantID)
+	}
+
+	logger.Info().
+		Int("total_events", totalEvents).
+		Int("goroutines", numGoroutines).
+		Int("events_per_goroutine", eventsPerGoroutine).
+		Msg("Concurrent audit appends test completed successfully")
+}
