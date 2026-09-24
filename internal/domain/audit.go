@@ -54,8 +54,11 @@ func (a *AuditEvent) ChainInput() string {
 		}
 	}
 	// prev_hash|seq|tenant_id|actor_user_id|action|entity_type|entity_id|payload|created_at
-	// created_at truncated to microsecond precision
-	created := a.CreatedAt.Truncate(time.Microsecond).Format(time.RFC3339Nano)
+	// created_at truncated to microsecond precision and canonicalized to UTC:
+	// timestamps scanned back from the DB carry the session timezone offset
+	// (e.g. -03:00), which formats differently than the UTC ("Z") string the
+	// writer hashed — same instant, different hash input.
+	created := a.CreatedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 	return a.PrevHash + "|" +
 		strconv.FormatInt(a.Seq, 10) + "|" +
 		a.TenantID.String() + "|" +

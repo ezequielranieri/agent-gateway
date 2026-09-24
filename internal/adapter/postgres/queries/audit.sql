@@ -14,7 +14,7 @@ new_seq AS (
 genesis AS (
     SELECT '\x0000000000000000000000000000000000000000000000000000000000000000'::bytea AS hash
 )
-INSERT INTO public.audit_events (tenant_id, seq, actor_type, actor_id, action, entity_type, entity_id, payload, severity, prev_hash, hash)
+INSERT INTO public.audit_events (tenant_id, seq, actor_type, actor_id, action, entity_type, entity_id, payload, severity, prev_hash, hash, created_at)
 SELECT
     $1,
     ns.next_seq,
@@ -26,7 +26,8 @@ SELECT
     $7,
     $8,
     COALESCE(p.hash, g.hash),
-    $9 -- pre-computed hash from application layer
+    $9, -- pre-computed hash from application layer
+    $10 -- created_at from application layer (part of chain hash input)
 FROM new_seq ns
 CROSS JOIN genesis g
 LEFT JOIN prev p ON true
