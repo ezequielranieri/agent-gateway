@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 	"time"
 
@@ -174,6 +176,51 @@ func TestAuditEvent_VerifyChainInput(t *testing.T) {
 	event.Payload = []byte(`{"data":"test"}`)
 	event.Seq = 2
 	assert.False(t, event.VerifyChainInput())
+}
+
+func TestAuditEvent_ChainInput_TimezoneCanonicalization(t *testing.T) {
+	// Same instant: 2024-01-15 10:30:00 UTC = 2024-01-15 07:30:00 -03:00
+	tenantID := NewUUID()
+	userID := NewUUID()
+	prevHash := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	eventUTC := &AuditEvent{
+		ID:          NewUUID(),
+		TenantID:    tenantID,
+		Seq:         1,
+		PrevHash:    prevHash,
+		ActorUserID: &userID,
+		Action:      "test_action",
+		EntityType:  "test_entity",
+		Payload:     []byte(`{"data":"test"}`),
+		Severity:    AuditSeverityInfo,
+		CreatedAt:   time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+	}
+
+	eventMinus3 := &AuditEvent{
+		ID:          NewUUID(),
+		TenantID:    tenantID,
+		Seq:         1,
+		PrevHash:    prevHash,
+		ActorUserID: &userID,
+		Action:      "test_action",
+		EntityType:  "test_entity",
+		Payload:     []byte(`{"data":"test"}`),
+		Severity:    AuditSeverityInfo,
+		// Same instant, different location: 07:30 -03:00 = 10:30 UTC
+		CreatedAt: time.Date(2024, 1, 15, 7, 30, 0, 0, time.FixedZone("-03:00", -3*3600)),
+	}
+
+	// Both should produce identical ChainInput (canonicalized to UTC)
+	inputUTC := eventUTC.ChainInput()
+	inputMinus3 := eventMinus3.ChainInput()
+
+	assert.Equal(t, inputUTC, inputMinus3, "ChainInput must be identical for same instant regardless of timezone")
+
+	// Verify both hashes match when computed from their respective ChainInput
+	hashUTC := sha256.Sum256([]byte(inputUTC))
+	hashMinus3 := sha256.Sum256([]byte(inputMinus3))
+	assert.Equal(t, hex.EncodeToString(hashUTC[:]), hex.EncodeToString(hashMinus3[:]), "Chain hashes must match for same instant")
 }
 
 func TestReviewRequest_IsPending(t *testing.T) {

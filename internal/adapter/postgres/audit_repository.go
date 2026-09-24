@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -36,10 +37,10 @@ type AuditFilter struct {
 
 // VerifyResult represents the result of chain verification
 type VerifyResult struct {
-	Valid      bool
-	BrokenSeq  int64
-	TotalSeen  int64
-	Error      error
+	Valid     bool
+	BrokenSeq int64
+	TotalSeen int64
+	Error     error
 }
 
 // AuditRepository implements the audit repository using SQLC
@@ -92,30 +93,12 @@ func computeChainInput(prevHash string, seq int64, tenantID domain.UUID, actorID
 }
 
 // Append adds an audit event with hash chaining.
-	// Runs inside WithTenantTx (tenant-bound transaction) and delegates to AppendWithTx.
-	// The advisory lock is acquired inside AppendWithTx.
-	func (r *AuditRepository) Append(ctx context.Context, event *domain.AuditEvent) error {
-		return WithTenantTx(ctx, r.pool, event.TenantID, func(ctx context.Context, tx pgx.Tx) error {
-			return r.AppendWithTx(ctx, tx, event)
-		})
-	}
-
-// advisoryLockClassID returns a stable class ID for tool registry audit locks
-// This avoids collisions with other advisory locks in the application
-func (r *AuditRepository) advisoryLockClassID() int32 {
-	// Use a fixed class ID for tool registry audit events
-	// 0x74726772 = "trgr" in ASCII (tool registry)
-	return 0x74726772
-}
-
-// advisoryLockObjectID generates a unique object ID for a tenant
-// Uses first 4 bytes of UUID as int32
-func (r *AuditRepository) advisoryLockObjectID(tenantID domain.UUID) int32 {
-	var key int32
-	for i := 0; i < 4 && i < len(tenantID); i++ {
-		key = (key << 8) | int32(tenantID[i])
-	}
-	return key
+// Runs inside WithTenantTx (tenant-bound transaction) and delegates to AppendWithTx.
+// The row-level lock per tenant is acquired inside AppendWithTx.
+func (r *AuditRepository) Append(ctx context.Context, event *domain.AuditEvent) error {
+	return WithTenantTx(ctx, r.pool, event.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		return r.AppendWithTx(ctx, tx, event)
+	})
 }
 
 // contains is a simple substring check used for error classification
@@ -254,23 +237,38 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 }
 
 // AppendWithTx adds an audit event with hash chaining within an existing transaction.
-	// This is used for atomic audit emission alongside the primary operation (e.g., tool definition write).
-	// The transaction must already have the tenant GUC set via WithTenantTx.
-	// Acquires advisory lock to serialize chain appends for this tenant.
-	func (r *AuditRepository) AppendWithTx(ctx context.Context, tx pgx.Tx, event *domain.AuditEvent) error {
-		// Acquire transaction-scoped advisory lock to serialize chain appends for this tenant.
-		// Use pg_advisory_xact_lock (tx-scoped) which works correctly with connection pooling.
-		// The lock is automatically released when the transaction commits or rolls back.
-		classID := r.advisoryLockClassID()
-		objID := r.advisoryLockObjectID(event.TenantID)
-		_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, classID, objID)
-		if err != nil {
-			return fmt.Errorf("failed to acquire advisory lock: %w", err)
-		}
+// This is used for atomic audit emission alongside the primary operation (e.g., tool definition write).
+// The transaction must already have the tenant GUC set via WithTenantTx.
+// Acquires row-level lock per tenant via SELECT ... FOR UPDATE on audit_chain_locks.
+func (r *AuditRepository) AppendWithTx(ctx context.Context, tx pgx.Tx, event *domain.AuditEvent) error {
+	// Insert lock row if not exists (to ensure row for SELECT FOR UPDATE)
+	// Acquire row-level lock for this tenant (held until transaction end)
+	_, err := tx.Exec(ctx, `
+			INSERT INTO public.audit_chain_locks (tenant_id)
+			VALUES ($1)
+			ON CONFLICT (tenant_id) DO NOTHING
+			`, event.TenantID)
+	if err != nil {
+		return fmt.Errorf("failed to ensure lock row: %w", err)
+	}
 
+	// Acquire tenant lock to serialize chain appends for this tenant.
+	// SELECT ... FOR UPDATE acquires a row-level lock that is held until transaction end.
+	var dummy int64
+	err = tx.QueryRow(ctx, `SELECT 1 FROM public.audit_chain_locks WHERE tenant_id = $1 FOR UPDATE`, event.TenantID).Scan(&dummy)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("lock row missing for tenant %s: %w", event.TenantID, err)
+		}
+		return fmt.Errorf("failed to acquire tenant lock: %w", err)
+	}
+
+	// Set CreatedAt to current UTC time truncated to microsecond for hash input
+	createdAt := time.Now().UTC().Truncate(time.Microsecond)
+	event.CreatedAt = createdAt
 	// Get the last event for this tenant to compute prev_hash and seq
 	lastEvent, err := r.getLastEventTx(ctx, tx, event.TenantID)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("failed to get last event: %w", err)
 	}
 
@@ -292,7 +290,7 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 	}
 
 	// Compute chain input and hash
-	chainInput := computeChainInput(prevHash, seq, event.TenantID, event.ActorUserID, event.Action, event.EntityType, event.EntityID, canonicalPayload, event.CreatedAt)
+	chainInput := computeChainInput(prevHash, seq, event.TenantID, event.ActorUserID, event.Action, event.EntityType, event.EntityID, canonicalPayload, createdAt)
 	hashBytes := sha256.Sum256([]byte(chainInput))
 
 	// Prepare actor ID
@@ -324,6 +322,7 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 		Payload:    canonicalPayload,
 		Severity:   string(event.Severity),
 		Hash:       hashBytes[:],
+		CreatedAt:  createdAt,
 	}
 
 	// Use transaction-bound queries so RLS GUC is active on this connection
@@ -331,6 +330,18 @@ func (r *AuditRepository) Query(ctx context.Context, filter AuditFilter) ([]*dom
 	created, err := q.CreateAuditEvent(ctx, createParams)
 	if err != nil {
 		return fmt.Errorf("failed to insert audit event: %w", err)
+	}
+
+	// Validate that returned values match what we computed
+	if created.Seq != seq {
+		return fmt.Errorf("sequence mismatch: expected %d, got %d", seq, created.Seq)
+	}
+	if hex.EncodeToString(created.PrevHash) != prevHash {
+		return fmt.Errorf("prev_hash mismatch: expected %s, got %s", prevHash, hex.EncodeToString(created.PrevHash))
+	}
+	createdAtTrunc := created.CreatedAt.UTC().Truncate(time.Microsecond)
+	if !createdAtTrunc.Equal(createdAt) {
+		return fmt.Errorf("created_at mismatch: expected %v, got %v", createdAt, createdAtTrunc)
 	}
 
 	// Update the event with generated values
@@ -359,7 +370,7 @@ func (r *AuditRepository) getLastEventTx(ctx context.Context, tx pgx.Tx, tenantI
 	defer rows.Close()
 
 	if !rows.Next() {
-		return nil, sql.ErrNoRows
+		return nil, pgx.ErrNoRows
 	}
 
 	var i postgressqlc.AuditEvent
@@ -435,7 +446,7 @@ func (r *AuditRepository) VerifyChain(ctx context.Context, tenantID domain.UUID,
 				return nil
 			}
 
-			prevHash = []byte(event.ChainHash)
+			prevHash = i.Hash
 		}
 
 		if err := rows.Err(); err != nil {
