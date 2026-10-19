@@ -251,6 +251,14 @@ func (h *ReviewHandlers) ApproveReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get tenant ID from auth context (reviewer's tenant)
+	tenantID, ok := middleware.GetTenantID(r)
+	if !ok {
+		logger.Debug().Msg("No tenant in auth context - cannot approve")
+		h.writeError(w, r, http.StatusForbidden, domain.ErrInvalidToken)
+		return
+	}
+
 	// Parse request body for token
 	var req struct {
 		Token          string `json:"token"`
@@ -268,9 +276,10 @@ func (h *ReviewHandlers) ApproveReview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := hitl.ApproveInput{
-		Token:           req.Token,
-		DecidedBy:       userID,
-		DecisionReason:  req.DecisionReason,
+		Token:          req.Token,
+		DecidedBy:      userID,
+		DecisionReason: req.DecisionReason,
+		TenantID:       tenantID,
 	}
 
 	output, err := h.hitlUC.Approve(ctx, input)
@@ -308,6 +317,14 @@ func (h *ReviewHandlers) RejectReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get tenant ID from auth context (rejector's tenant)
+	tenantID, ok := middleware.GetTenantID(r)
+	if !ok {
+		logger.Debug().Msg("No tenant in auth context - cannot reject")
+		h.writeError(w, r, http.StatusForbidden, domain.ErrInvalidToken)
+		return
+	}
+
 	var req struct {
 		Token          string `json:"token"`
 		DecisionReason string `json:"decision_reason,omitempty"`
@@ -327,6 +344,7 @@ func (h *ReviewHandlers) RejectReview(w http.ResponseWriter, r *http.Request) {
 		Token:          req.Token,
 		DecidedBy:      userID,
 		DecisionReason: req.DecisionReason,
+		TenantID:       tenantID,
 	}
 
 	review, err := h.hitlUC.Reject(ctx, input)

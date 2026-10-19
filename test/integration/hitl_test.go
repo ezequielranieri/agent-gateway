@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -523,18 +524,25 @@ func testCrossTenantIsolation(t *testing.T, reviewRepo *pgadapter.ReviewReposito
 	userA := domain.NewUUID()
 	userB := domain.NewUUID()
 
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
-		VALUES ($1, $2, 'usera@example.com', 'hashed', 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, userA, tenantA)
+	// Insert users for each tenant using WithTenantTx for RLS
+	err = pgadapter.WithTenantTx(ctx, dbPool, tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
+			VALUES ($1, $2, 'usera@example.com', 'hashed', 'active')
+			ON CONFLICT (id, tenant_id) DO NOTHING
+		`, userA, tenantA)
+		return err
+	})
 	require.NoError(t, err)
 
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
-		VALUES ($1, $2, 'userb@example.com', 'hashed', 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, userB, tenantB)
+	err = pgadapter.WithTenantTx(ctx, dbPool, tenantB, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
+			VALUES ($1, $2, 'userb@example.com', 'hashed', 'active')
+			ON CONFLICT (id, tenant_id) DO NOTHING
+		`, userB, tenantB)
+		return err
+	})
 	require.NoError(t, err)
 
 	// Create review for tenant A

@@ -3,8 +3,14 @@ INSERT INTO public.review_requests (tenant_id, requester_id, reviewer_id, action
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, tenant_id, requester_id, reviewer_id, action, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at;
 
+-- name: GetReviewRequestByTokenHashWithTenant :one
+SELECT id, tenant_id, requester_id, reviewer_id, action, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
+FROM public.review_requests
+WHERE tenant_id = $1 AND token_hash = $2
+LIMIT 1;
+
 -- name: GetReviewRequestByTokenHash :one
-SELECT id, tenant_id, requester_id, reviewer_id, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
+SELECT id, tenant_id, requester_id, reviewer_id, action, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
 FROM public.review_requests
 WHERE token_hash = $1
 LIMIT 1;
@@ -38,6 +44,11 @@ ORDER BY created_at DESC
 LIMIT $5 OFFSET $6;
 
 -- name: SweepExpiredReviews :exec
+UPDATE public.review_requests
+SET status = 'EXPIRED', updated_at = now()
+WHERE tenant_id = $1 AND status = 'PENDING' AND expires_at <= now();
+
+-- name: SweepExpiredReviewsCount :execrows
 UPDATE public.review_requests
 SET status = 'EXPIRED', updated_at = now()
 WHERE tenant_id = $1 AND status = 'PENDING' AND expires_at <= now();

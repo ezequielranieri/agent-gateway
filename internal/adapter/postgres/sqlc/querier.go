@@ -32,7 +32,8 @@ type Querier interface {
 	GetQuotaByScope(ctx context.Context, arg GetQuotaByScopeParams) (Quota, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (RefreshToken, error)
 	GetReviewRequestByID(ctx context.Context, arg GetReviewRequestByIDParams) (ReviewRequest, error)
-	GetReviewRequestByTokenHash(ctx context.Context, tokenHash []byte) (GetReviewRequestByTokenHashRow, error)
+	GetReviewRequestByTokenHash(ctx context.Context, tokenHash []byte) (ReviewRequest, error)
+	GetReviewRequestByTokenHashWithTenant(ctx context.Context, arg GetReviewRequestByTokenHashWithTenantParams) (ReviewRequest, error)
 	GetRoleByID(ctx context.Context, id uuid.UUID) (Role, error)
 	GetRolePermissions(ctx context.Context, arg GetRolePermissionsParams) ([]string, error)
 	GetTenantByID(ctx context.Context, id uuid.UUID) (Tenant, error)
@@ -56,6 +57,7 @@ type Querier interface {
 	RevokeRolePermissions(ctx context.Context, arg RevokeRolePermissionsParams) error
 	RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) (RotateRefreshTokenRow, error)
 	SweepExpiredReviews(ctx context.Context, tenantID uuid.UUID) error
+	SweepExpiredReviewsCount(ctx context.Context, tenantID uuid.UUID) (int64, error)
 	UpdateQuota(ctx context.Context, arg UpdateQuotaParams) (Quota, error)
 	UpdateRefreshTokenLastUsed(ctx context.Context, id uuid.UUID) error
 	UpdateTenantStatus(ctx context.Context, arg UpdateTenantStatusParams) (Tenant, error)
