@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx/v5" driver for wait.ForSQL
 	"github.com/moby/moby/api/types/network"
@@ -176,6 +177,7 @@ func (tc *TestContainer) Teardown(t *testing.T) {
 
 // SetupTestData creates test tenant, user, and role assignment
 func SetupTestData(ctx context.Context, dbPool *pgxpool.Pool, tenantID, userID, roleID domain.UUID) error {
+	// Insert tenant (global table, no RLS)
 	_, err := dbPool.Exec(ctx, `
 		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Test Tenant', 'active')
 		ON CONFLICT (id) DO NOTHING
@@ -184,41 +186,39 @@ func SetupTestData(ctx context.Context, dbPool *pgxpool.Pool, tenantID, userID, 
 		return err
 	}
 
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
-		VALUES ($1, $2, 'test@example.com', 'hashed', 'active')
-		ON CONFLICT (id, tenant_id) DO NOTHING
-	`, userID, tenantID)
-	if err != nil {
-		return err
-	}
+	// Insert user, user_role, and quota using WithTenantTx for RLS
+	err = pgadapter.WithTenantTx(ctx, dbPool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
+			VALUES ($1, $2, 'test@example.com', 'hashed', 'active')
+			ON CONFLICT (id, tenant_id) DO NOTHING
+		`, userID, tenantID)
+		if err != nil {
+			return err
+		}
 
-	// Roles are global catalog - use predefined role IDs from seed migration
-	// roleID should be one of: admin, operator, viewer (see 0013_seed)
-	// Assign role to user in this tenant via user_roles
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.user_roles (tenant_id, user_id, role_id) 
-		VALUES ($1, $2, $3)
-		ON CONFLICT (tenant_id, user_id, role_id) DO NOTHING
-	`, tenantID, userID, roleID)
-	if err != nil {
-		return err
-	}
+		// Assign role to user in this tenant via user_roles
+		_, err = tx.Exec(ctx, `
+			INSERT INTO public.user_roles (tenant_id, user_id, role_id) 
+			VALUES ($1, $2, $3)
+			ON CONFLICT (tenant_id, user_id, role_id) DO NOTHING
+		`, tenantID, userID, roleID)
+		if err != nil {
+			return err
+		}
 
-	// Insert high quota for testing (avoid rate limiting in tests)
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.quotas (tenant_id, scope, scope_id, requests_per_min, tokens_per_min, tool_execs_per_min)
-		VALUES ($1, 'tenant', '00000000-0000-0000-0000-000000000000', 10000, 1000000, 1000)
-		ON CONFLICT (tenant_id, scope, scope_id) DO UPDATE SET
-			requests_per_min = EXCLUDED.requests_per_min,
-			tokens_per_min = EXCLUDED.tokens_per_min,
-			tool_execs_per_min = EXCLUDED.tool_execs_per_min
-	`, tenantID)
-	if err != nil {
+		// Insert high quota for testing (avoid rate limiting in tests)
+		_, err = tx.Exec(ctx, `
+			INSERT INTO public.quotas (tenant_id, scope, scope_id, requests_per_min, tokens_per_min, tool_execs_per_min)
+			VALUES ($1, 'tenant', '00000000-0000-0000-0000-000000000000', 10000, 1000000, 1000)
+			ON CONFLICT (tenant_id, scope, scope_id) DO UPDATE SET
+				requests_per_min = EXCLUDED.requests_per_min,
+				tokens_per_min = EXCLUDED.tokens_per_min,
+				tool_execs_per_min = EXCLUDED.tool_execs_per_min
+		`, tenantID)
 		return err
-	}
-
-	return nil
+	})
+	return err
 }
 
 // CreateTestRouter creates a test router with all middleware and handlers
