@@ -88,16 +88,25 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	pgDSN, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
-	// Start Redis container
+	// Start Redis container with a robust wait strategy that verifies Redis is actually accepting commands
 	redisContainer, err := redisModule.Run(ctx, "redis:7-alpine",
-		testcontainers.WithWaitStrategy(wait.ForLog("Ready to accept connections")),
+		testcontainers.WithWaitStrategy(
+			wait.ForAll(
+				wait.ForLog("Ready to accept connections"),
+				wait.ForListeningPort("6379/tcp"),
+				wait.ForExec([]string{"redis-cli", "ping"}),
+			),
+		),
 	)
 	require.NoError(t, err)
 
-	// Get Redis host:port (Endpoint returns "host:port" format)
-	redisEndpoint, err := redisContainer.Endpoint(ctx, "")
+	// Get Redis host:port - use 127.0.0.1 to avoid IPv6 localhost issues
+	// where the port is only mapped on IPv4
+	_, err = redisContainer.Host(ctx)
 	require.NoError(t, err)
-	redisAddr := redisEndpoint
+	redisPort, err := redisContainer.MappedPort(ctx, "6379/tcp")
+	require.NoError(t, err)
+	redisAddr := "127.0.0.1:" + redisPort.Port()
 
 	// Connect to PostgreSQL as superuser (postgres) for setup
 	adminPool, err := pgxpool.New(ctx, pgDSN)
@@ -150,11 +159,20 @@ func SetupTestContainers(t *testing.T) *TestContainer {
 	// Verify test role is NOSUPERUSER NOBYPASSRLS
 	checkTestRole(t, dbPool)
 
-	// Connect to Redis
+	// Connect to Redis with retry to handle race condition where port is mapped but Redis isn't ready
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: redisAddr,
 	})
-	require.NoError(t, redisClient.Ping(ctx).Err())
+	// Retry ping to handle race condition
+	var pingErr error
+	for i := 0; i < 10; i++ {
+		pingErr = redisClient.Ping(ctx).Err()
+		if pingErr == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	require.NoError(t, pingErr, "failed to connect to Redis after retries")
 
 	return &TestContainer{
 		PGContainer:    pgContainer,
