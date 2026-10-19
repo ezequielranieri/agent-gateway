@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -61,8 +62,9 @@ func (r *RoleRepository) GetByID(ctx context.Context, id domain.UUID) (*domain.R
 // ListByTenant lists roles that have permissions assigned in a tenant
 func (r *RoleRepository) ListByTenant(ctx context.Context, tenantID domain.UUID) ([]domain.Role, error) {
 	var roles []domain.Role
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		results, err := r.queries.ListRolesByTenant(ctx, uuid.UUID(tenantID))
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+		results, err := q.ListRolesByTenant(ctx, uuid.UUID(tenantID))
 		if err != nil {
 			return err
 		}
@@ -82,25 +84,27 @@ func (r *RoleRepository) ListByTenant(ctx context.Context, tenantID domain.UUID)
 
 // AssignPermissions assigns permissions to a role within a tenant
 func (r *RoleRepository) AssignPermissions(ctx context.Context, tenantID domain.UUID, roleID domain.UUID, permissions []string) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.AssignRolePermissionsParams{
 			RoleID:   uuid.UUID(roleID),
 			TenantID: uuid.UUID(tenantID),
 			Column3:  permissions,
 		}
-		return r.queries.AssignRolePermissions(ctx, params)
+		return q.AssignRolePermissions(ctx, params)
 	})
 }
 
 // GetPermissions retrieves permissions for a role within a tenant
 func (r *RoleRepository) GetPermissions(ctx context.Context, tenantID domain.UUID, roleID domain.UUID) ([]string, error) {
 	var perms []string
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.GetRolePermissionsParams{
 			RoleID:   uuid.UUID(roleID),
 			TenantID: uuid.UUID(tenantID),
 		}
-		results, err := r.queries.GetRolePermissions(ctx, params)
+		results, err := q.GetRolePermissions(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -120,11 +124,12 @@ func (r *RoleRepository) Delete(ctx context.Context, id domain.UUID) error {
 
 // RevokePermissions revokes all permissions for a role within a tenant
 func (r *RoleRepository) RevokePermissions(ctx context.Context, tenantID domain.UUID, roleID domain.UUID) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.RevokeRolePermissionsParams{
 			RoleID:   uuid.UUID(roleID),
 			TenantID: uuid.UUID(tenantID),
 		}
-		return r.queries.RevokeRolePermissions(ctx, params)
+		return q.RevokeRolePermissions(ctx, params)
 	})
 }
