@@ -28,6 +28,7 @@ type Querier interface {
 	DeleteToolDefinition(ctx context.Context, arg DeleteToolDefinitionParams) error
 	GetAuditEventBySeq(ctx context.Context, arg GetAuditEventBySeqParams) (GetAuditEventBySeqRow, error)
 	GetAuditEvents(ctx context.Context, arg GetAuditEventsParams) ([]GetAuditEventsRow, error)
+	GetGuardrailViolationByID(ctx context.Context, arg GetGuardrailViolationByIDParams) (GuardrailViolation, error)
 	GetQuotaByScope(ctx context.Context, arg GetQuotaByScopeParams) (Quota, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (RefreshToken, error)
 	GetReviewRequestByID(ctx context.Context, arg GetReviewRequestByIDParams) (ReviewRequest, error)
