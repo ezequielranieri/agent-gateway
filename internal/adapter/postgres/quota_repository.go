@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	postgressqlc "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres/sqlc"
@@ -27,7 +28,8 @@ func NewQuotaRepository(pool *pgxpool.Pool) *QuotaRepository {
 
 // Create creates a new quota
 func (r *QuotaRepository) Create(ctx context.Context, tenantID domain.UUID, quota *domain.Quota) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.CreateQuotaParams{
 			TenantID:         uuid.UUID(tenantID),
 			Scope:            string(quota.Scope),
@@ -36,7 +38,7 @@ func (r *QuotaRepository) Create(ctx context.Context, tenantID domain.UUID, quot
 			TokensPerMin:     int32(quota.TokensPerMin),
 			ToolExecsPerMin:  int32(quota.ToolExecsPerMin),
 		}
-		result, err := r.queries.CreateQuota(ctx, params)
+		result, err := q.CreateQuota(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -52,13 +54,14 @@ func (r *QuotaRepository) Create(ctx context.Context, tenantID domain.UUID, quot
 // Uses background context for metadata read to avoid request deadline issues
 func (r *QuotaRepository) GetByScope(ctx context.Context, tenantID domain.UUID, scope domain.QuotaScope, scopeID domain.UUID) (*domain.Quota, error) {
 	var quota *domain.Quota
-	err := WithTenantBackground(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantTxBackground(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.GetQuotaByScopeParams{
 			TenantID: uuid.UUID(tenantID),
 			Scope:    string(scope),
 			ScopeID:  uuid.UUID(scopeID),
 		}
-		result, err := r.queries.GetQuotaByScope(ctx, params)
+		result, err := q.GetQuotaByScope(ctx, params)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return domain.ErrNotFound
@@ -85,8 +88,9 @@ func (r *QuotaRepository) GetByScope(ctx context.Context, tenantID domain.UUID, 
 // Uses background context for metadata read to avoid request deadline issues
 func (r *QuotaRepository) ListByTenant(ctx context.Context, tenantID domain.UUID) ([]domain.Quota, error) {
 	var quotas []domain.Quota
-	err := WithTenantBackground(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		results, err := r.queries.ListQuotasByTenant(ctx, uuid.UUID(tenantID))
+	err := WithTenantTxBackground(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+		results, err := q.ListQuotasByTenant(ctx, uuid.UUID(tenantID))
 		if err != nil {
 			return err
 		}
@@ -111,7 +115,8 @@ func (r *QuotaRepository) ListByTenant(ctx context.Context, tenantID domain.UUID
 
 // Update updates a quota
 func (r *QuotaRepository) Update(ctx context.Context, tenantID domain.UUID, quota *domain.Quota) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.UpdateQuotaParams{
 			TenantID:         uuid.UUID(tenantID),
 			Scope:            string(quota.Scope),
@@ -120,7 +125,7 @@ func (r *QuotaRepository) Update(ctx context.Context, tenantID domain.UUID, quot
 			TokensPerMin:     int32(quota.TokensPerMin),
 			ToolExecsPerMin:  int32(quota.ToolExecsPerMin),
 		}
-		result, err := r.queries.UpdateQuota(ctx, params)
+		result, err := q.UpdateQuota(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -131,12 +136,13 @@ func (r *QuotaRepository) Update(ctx context.Context, tenantID domain.UUID, quot
 
 // Delete deletes a quota
 func (r *QuotaRepository) Delete(ctx context.Context, tenantID domain.UUID, scope domain.QuotaScope, scopeID domain.UUID) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.DeleteQuotaParams{
 			TenantID: uuid.UUID(tenantID),
 			Scope:    string(scope),
 			ScopeID:  uuid.UUID(scopeID),
 		}
-		return r.queries.DeleteQuota(ctx, params)
+		return q.DeleteQuota(ctx, params)
 	})
 }
