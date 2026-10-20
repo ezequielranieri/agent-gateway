@@ -30,8 +30,15 @@ func TestVerifyTokenHash(t *testing.T) {
 
 	t.Run("invalid token fails verification", func(t *testing.T) {
 		token, hashHex := generateTestToken()
-		// Modify the token
-		invalidToken := token[:len(token)-1] + "f"
+		// Modify the token - ensure it's actually different
+		lastChar := token[len(token)-1]
+		var differentChar byte
+		if lastChar == 'f' {
+			differentChar = '0'
+		} else {
+			differentChar = 'f'
+		}
+		invalidToken := token[:len(token)-1] + string(differentChar)
 		err := verifyTokenHash(hashHex, invalidToken)
 		assert.Error(t, err)
 		assert.Equal(t, domain.ErrInvalidToken, err)

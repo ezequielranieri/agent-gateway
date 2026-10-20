@@ -92,8 +92,8 @@ func (uc *HITLUseCase) CreateReview(ctx context.Context, input CreateReviewInput
 	}
 
 	// Create in repository (generates token and stores hash)
-	// Use background context for repository operation to avoid request deadline issues
-	createdReview, token, err := uc.reviewRepo.Create(context.Background(), review)
+	// Use request context for creation (read+write); if client disconnects, creation is idempotent-safe
+	createdReview, token, err := uc.reviewRepo.Create(ctx, review)
 	if err != nil {
 		uc.logger.Error().Err(err).Msg("Failed to create review request")
 		return nil, fmt.Errorf("failed to create review: %w", err)
@@ -174,8 +174,8 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 
 	// Look up review by token hash WITHIN the reviewer's tenant
 	// This ensures RLS is enforced and no cross-tenant lookup occurs
-	// Use background context to avoid test deadline issues; production uses request context
-	review, err := uc.reviewRepo.GetByTokenHashWithTenant(context.Background(), input.TenantID, tokenHash)
+	// Use request context for read (lookup); writes use WithoutCancel below
+	review, err := uc.reviewRepo.GetByTokenHashWithTenant(ctx, input.TenantID, tokenHash)
 	if err != nil {
 		if err == domain.ErrNotFound {
 			uc.logger.Debug().Msg("Review not found for token in tenant")
@@ -232,8 +232,8 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 
 	// Atomic state transition: PENDING -> APPROVED
 	// The UPDATE ... WHERE status='PENDING' AND token_hash=$1 ensures only one approve succeeds
-	// Use background context to avoid test deadline issues; production uses WithoutCancel
-	err = uc.reviewRepo.UpdateStatus(context.Background(), review.TenantID, review.ID, domain.ReviewStatusApproved, &input.DecidedBy)
+	// Write that must complete: use WithoutCancel to survive client disconnect
+	err = uc.reviewRepo.UpdateStatus(context.WithoutCancel(ctx), review.TenantID, review.ID, domain.ReviewStatusApproved, &input.DecidedBy)
 	if err != nil {
 		if err == domain.ErrReviewNotPending {
 			uc.logger.Debug().Msg("Concurrent approve detected - review no longer pending")
@@ -242,9 +242,9 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 		return nil, fmt.Errorf("failed to approve review: %w", err)
 	}
 
-	// Refresh review to get updated status
+	// Refresh review to get updated status (read - use request context)
 	var approvedReview *domain.ReviewRequest
-	approvedReview, err = uc.reviewRepo.GetByID(context.Background(), review.TenantID, review.ID)
+	approvedReview, err = uc.reviewRepo.GetByID(ctx, review.TenantID, review.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get approved review: %w", err)
 	}
@@ -297,7 +297,8 @@ func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.R
 	tokenHash := hashToken(input.Token)
 
 	// Look up review by token hash WITHIN the rejector's tenant
-	review, err := uc.reviewRepo.GetByTokenHashWithTenant(context.Background(), input.TenantID, tokenHash)
+	// Use request context for read (lookup); writes use WithoutCancel below
+	review, err := uc.reviewRepo.GetByTokenHashWithTenant(ctx, input.TenantID, tokenHash)
 	if err != nil {
 		if err == domain.ErrNotFound {
 			return nil, domain.ErrInvalidToken
@@ -320,8 +321,8 @@ func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.R
 	}
 
 	// Atomic state transition: PENDING -> REJECTED
-	// Use background context to avoid test deadline issues; production uses WithoutCancel
-	err = uc.reviewRepo.UpdateStatus(context.Background(), review.TenantID, review.ID, domain.ReviewStatusRejected, &input.DecidedBy)
+	// Write that must complete: use WithoutCancel to survive client disconnect
+	err = uc.reviewRepo.UpdateStatus(context.WithoutCancel(ctx), review.TenantID, review.ID, domain.ReviewStatusRejected, &input.DecidedBy)
 	if err != nil {
 		if err == domain.ErrReviewNotPending {
 			return nil, domain.ErrReviewNotPending
@@ -329,9 +330,9 @@ func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.R
 		return nil, fmt.Errorf("failed to reject review: %w", err)
 	}
 
-	// Refresh review
+	// Refresh review (read - use request context)
 	var rejectedReview *domain.ReviewRequest
-	rejectedReview, err = uc.reviewRepo.GetByID(context.Background(), review.TenantID, review.ID)
+	rejectedReview, err = uc.reviewRepo.GetByID(ctx, review.TenantID, review.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rejected review: %w", err)
 	}
@@ -372,8 +373,8 @@ func (uc *HITLUseCase) Execute(ctx context.Context, input ExecuteInput) (*domain
 		Str("review_id", input.ReviewID.String()).
 		Msg("Marking review as executed")
 
-	// Get review within tenant context
-	review, err := uc.reviewRepo.GetByID(context.Background(), input.TenantID, input.ReviewID)
+	// Get review within tenant context (read - use request context)
+	review, err := uc.reviewRepo.GetByID(ctx, input.TenantID, input.ReviewID)
 	if err != nil {
 		return nil, err
 	}
@@ -383,15 +384,15 @@ func (uc *HITLUseCase) Execute(ctx context.Context, input ExecuteInput) (*domain
 		return nil, domain.ErrReviewNotPending // Or a more specific error
 	}
 
-	// Mark as executed - use background context to avoid test deadline issues; production uses WithoutCancel
-	err = uc.reviewRepo.MarkExecuted(context.Background(), input.TenantID, input.ReviewID)
+	// Mark as executed - write that must complete: use WithoutCancel to survive client disconnect
+	err = uc.reviewRepo.MarkExecuted(context.WithoutCancel(ctx), input.TenantID, input.ReviewID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mark review executed: %w", err)
 	}
 
-	// Refresh review
+	// Refresh review (read - use request context)
 	var executedReview *domain.ReviewRequest
-	executedReview, err = uc.reviewRepo.GetByID(context.Background(), input.TenantID, input.ReviewID)
+	executedReview, err = uc.reviewRepo.GetByID(ctx, input.TenantID, input.ReviewID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get executed review: %w", err)
 	}
