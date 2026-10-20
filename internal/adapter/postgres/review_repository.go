@@ -275,7 +275,7 @@ func convertSQLCReviewRequest(e postgressqlc.ReviewRequest) *domain.ReviewReques
 		TenantID:       domain.UUID(e.TenantID),
 		RequesterID:    domain.UUID(e.RequesterID),
 		ReviewerID:     reviewerID,
-		TokenHash:      string(e.TokenHash),
+		TokenHash:      hex.EncodeToString(e.TokenHash),
 		Action:         extractActionFromPayload(e.Payload), // Extract action from payload JSON
 		Payload:        string(e.Payload),
 		Status:         domain.ReviewStatus(e.Status),
