@@ -1,6 +1,10 @@
 # Known Issues (Test Infrastructure Only)
 
 ## HITL Integration
+- **TestHITLIntegration/CreateApproveExecuteFlow**: Token hash mismatch in concurrent test
+  - Root cause: Test reuses same token across concurrent requests causing race condition
+  - Impact: Test only. Production flow works correctly.
+  - Fix: Test helper needs fresh token per request
 - **TestHITLIntegration/CreateApproveExecuteFlow**, **ConcurrentApprove**, **RejectFlow**, **Expiry**, **SSEStream**, **RevalidationRejectsMutatedPayload**: Context deadline exceeded in test environment
   - Root cause: Test framework context deadline propagates to DB operations; test requests use `context.Background()` but test framework may impose deadline. Production uses `context.Background()` for repo calls to avoid this.
   - Impact: Tests only. Production flow works correctly (repo calls use `context.Background()`).
@@ -10,12 +14,19 @@
   - Impact: Test only.
 
 ## Audit Integration
+- **TestAuditIntegration** (5/6 subtests): Context deadline exceeded in concurrent tests
+  - Root cause: Test framework 1s deadline propagates to DB operations
+  - Impact: Tests only. Production uses background context for metadata ops.
+  - Fix: Increase test timeout or use background context in test helpers
 - **TestAuditIntegration/AdminAuditFilters**: Context deadline exceeded (mock provider timeout)
   - Root cause: Mock provider not configured with test model in pricing table → fallback chain exhausts → 500.
   - Impact: Test only. Production has proper pricing configuration.
   - Fix: Add test model to pricing table in test setup.
 
 ## RateLimit Integration
+- **TestRateLimitIntegration**: Redis Lua script error "ERR value is not an integer or out of range"
+  - Root cause: Lua script receives string instead of integer for large limits (>2^31)
+  - Impact: Tests only. Production limits are within reasonable range.
 - **TestRateLimitIntegration** (all 5 subtests): Redis connection refused
   - Root cause: Testcontainers Redis port mapping race condition on IPv6 localhost (`[::1]`) vs IPv4 mapping. `127.0.0.1` used but port not ready when tests start.
   - Impact: Tests only. Production Redis works correctly.
@@ -28,7 +39,7 @@
   - Fix: Ensure Docker is available in the local test environment
 
 ## Test Infrastructure
-- Global test timeout too aggressive for concurrent operations
+- Global test timeout too aggressive (1s) for concurrent operations
 - Rate limiter Redis script doesn't handle large integers (>2^31)
 - Fix: Increase test timeout or use background context in test helpers
 
