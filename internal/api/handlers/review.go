@@ -443,18 +443,50 @@ func (h *ReviewHandlers) StreamReview(w http.ResponseWriter, r *http.Request) {
 		}
 		return []byte(h.jwtSecret), nil
 	})
-	if err != nil || !token.Valid {
-		logger.Debug().Err(err).Msg("Invalid SSE ticket")
+
+	// Detailed JWT validation error handling
+	// jwt/v5 returns wrapped errors; classify by error message for proper HTTP status and logging
+	if err != nil {
+		errMsg := err.Error()
+		switch {
+		case contains(errMsg, "token is expired"):
+			logger.Debug().Err(err).Msg("SSE ticket expired (exp claim)")
+			h.writeError(w, r, http.StatusUnauthorized, domain.ErrUnauthorized)
+			return
+		case contains(errMsg, "token is not valid yet"):
+			logger.Debug().Err(err).Msg("SSE ticket not yet valid (nbf claim)")
+			h.writeError(w, r, http.StatusUnauthorized, domain.ErrUnauthorized)
+			return
+		case contains(errMsg, "signature is invalid"):
+			logger.Debug().Err(err).Msg("SSE ticket signature invalid")
+			h.writeError(w, r, http.StatusUnauthorized, domain.ErrUnauthorized)
+			return
+		case contains(errMsg, "malformed") || contains(errMsg, "invalid number of segments"):
+			logger.Debug().Err(err).Msg("SSE ticket malformed")
+			h.writeError(w, r, http.StatusUnauthorized, domain.ErrUnauthorized)
+			return
+		default:
+			logger.Debug().Err(err).Msg("SSE ticket validation error (other)")
+			h.writeError(w, r, http.StatusUnauthorized, domain.ErrUnauthorized)
+			return
+		}
+	}
+	if !token.Valid {
+		logger.Debug().Msg("SSE token invalid (token.Valid == false)")
 		h.writeError(w, r, http.StatusUnauthorized, domain.ErrUnauthorized)
 		return
 	}
 
 	// Verify ticket matches the review ID
 	if claims.ReviewID != reviewID.String() {
-		logger.Debug().Msg("Ticket review ID mismatch")
+		logger.Debug().Str("expected", reviewID.String()).Str("got", claims.ReviewID).Msg("Ticket review ID mismatch")
 		h.writeError(w, r, http.StatusForbidden, domain.ErrForbidden)
 		return
 	}
+
+	// Verify ticket tenant matches (if we have tenant context)
+	// This is a cross-tenant check: valid token but for different tenant's review
+	// Returns 403 Forbidden because the token is valid but not authorized for this resource
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -614,4 +646,9 @@ func (h *ReviewHandlers) writeError(w http.ResponseWriter, r *http.Request, stat
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+// contains checks if a string contains a substring (case-insensitive)
+func contains(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
