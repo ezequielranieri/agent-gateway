@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -69,7 +70,7 @@ func TestHITLIntegration(t *testing.T) {
 
 	// Test 4: Expiry (background job marks EXPIRED)
 	t.Run("Expiry", func(t *testing.T) {
-		testExpiry(t, hitlUC, reviewRepo, tc.Ctx, tenantID, userID, logger)
+		testExpiry(t, hitlUC, reviewRepo, tc.Ctx, tc.DBPool, tenantID, userID, logger)
 	})
 
 	// Test 5: SSE stream (connect, receive events, disconnect)
@@ -310,7 +311,7 @@ func testRejectFlow(t *testing.T, router http.Handler, token string, logger zero
 }
 
 func testExpiry(t *testing.T, hitlUC *hitl.HITLUseCase, reviewRepo *pgadapter.ReviewRepository,
-	ctx context.Context, tenantID, userID domain.UUID, logger zerolog.Logger) {
+	ctx context.Context, dbPool *pgxpool.Pool, tenantID, userID domain.UUID, logger zerolog.Logger) {
 
 	// Create a review that expires very soon (1 second)
 	review := &domain.ReviewRequest{
@@ -338,7 +339,7 @@ func testExpiry(t *testing.T, hitlUC *hitl.HITLUseCase, reviewRepo *pgadapter.Re
 	require.NoError(t, err)
 	assert.Equal(t, domain.ReviewStatusExpired, expiredReview.Status)
 
-	// Try to approve expired review - should fail
+	// Try to approve expired review - should fail with ErrExpired
 	review2 := &domain.ReviewRequest{
 		TenantID:    tenantID,
 		RequesterID: userID,
@@ -352,14 +353,65 @@ func testExpiry(t *testing.T, hitlUC *hitl.HITLUseCase, reviewRepo *pgadapter.Re
 	require.NoError(t, err)
 
 	// Try to approve - should fail with Expired
+	// Note: ApproveInput now requires TenantID from auth context (reviewer's tenant)
 	_, err = hitlUC.Approve(ctx, hitl.ApproveInput{
 		Token:     opaqueToken,
 		DecidedBy: userID,
+		TenantID:  tenantID, // Required: reviewer's tenant from auth context
 	})
 	assert.Error(t, err)
-	assert.Equal(t, domain.ErrExpired, err)
+	assert.Equal(t, domain.ErrExpired, err, "Approve on expired review should return ErrExpired")
 
-	logger.Info().Msg("Expiry test passed")
+	// Test suspended tenant: create a suspended tenant and verify its pending reviews behavior
+	// Decision: Suspended tenant's pending reviews NEVER expire (sweep only runs on active tenants)
+	// This is by design - ExpirePending only queries tenants with status='active'
+	suspendedTenant := domain.NewUUID()
+	_, err = dbPool.Exec(ctx, `
+		INSERT INTO public.tenants (id, name, status) VALUES ($1, 'Suspended Tenant', 'suspended')
+		ON CONFLICT (id) DO NOTHING
+	`, suspendedTenant)
+	require.NoError(t, err)
+
+	suspendedUser := domain.NewUUID()
+	err = pgadapter.WithTenantTx(ctx, dbPool, suspendedTenant, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
+			VALUES ($1, $2, 'suspended@example.com', 'hashed', 'active')
+			ON CONFLICT (id, tenant_id) DO NOTHING
+		`, suspendedUser, suspendedTenant)
+		return err
+	})
+	require.NoError(t, err)
+
+	// Create a pending review for suspended tenant with short TTL
+	suspendedReview := &domain.ReviewRequest{
+		TenantID:    suspendedTenant,
+		RequesterID: suspendedUser,
+		Action:      "tool:execute",
+		Payload:     `{"action":"tool:execute"}`,
+		Status:      domain.ReviewStatusPending,
+		ExpiresAt:   time.Now().Add(1 * time.Second),
+	}
+
+	createdSuspendedReview, _, err := reviewRepo.Create(ctx, suspendedReview)
+	require.NoError(t, err)
+
+	// Wait for expiry
+	time.Sleep(2 * time.Second)
+
+	// Run expiry sweep again - should NOT affect suspended tenant
+	count2, err := hitlUC.ExpirePending(ctx)
+	require.NoError(t, err)
+	// Count should only include active tenant reviews (the first one was already expired)
+	assert.Equal(t, int64(0), count2, "Suspended tenant reviews should not be expired by sweep")
+
+	// Verify suspended tenant's review is STILL PENDING (not expired)
+	suspendedReviewAfter, err := reviewRepo.GetByID(ctx, suspendedTenant, createdSuspendedReview.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ReviewStatusPending, suspendedReviewAfter.Status,
+		"Suspended tenant's pending review should remain PENDING - sweep only runs on active tenants")
+
+	logger.Info().Msg("Expiry test passed (including suspended tenant behavior)")
 }
 
 func testSSEStream(t *testing.T, router http.Handler, token string, logger zerolog.Logger,
@@ -523,18 +575,25 @@ func testCrossTenantIsolation(t *testing.T, reviewRepo *pgadapter.ReviewReposito
 	userA := domain.NewUUID()
 	userB := domain.NewUUID()
 
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
-		VALUES ($1, $2, 'usera@example.com', 'hashed', 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, userA, tenantA)
+	// Insert users for each tenant using WithTenantTx for RLS
+	err = pgadapter.WithTenantTx(ctx, dbPool, tenantA, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
+			VALUES ($1, $2, 'usera@example.com', 'hashed', 'active')
+			ON CONFLICT (id, tenant_id) DO NOTHING
+		`, userA, tenantA)
+		return err
+	})
 	require.NoError(t, err)
 
-	_, err = dbPool.Exec(ctx, `
-		INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
-		VALUES ($1, $2, 'userb@example.com', 'hashed', 'active')
-		ON CONFLICT (id) DO NOTHING
-	`, userB, tenantB)
+	err = pgadapter.WithTenantTx(ctx, dbPool, tenantB, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO public.users (id, tenant_id, email, password_hash, status) 
+			VALUES ($1, $2, 'userb@example.com', 'hashed', 'active')
+			ON CONFLICT (id, tenant_id) DO NOTHING
+		`, userB, tenantB)
+		return err
+	})
 	require.NoError(t, err)
 
 	// Create review for tenant A
@@ -590,34 +649,43 @@ func testRevalidationRejectsMutatedPayload(t *testing.T, router http.Handler, to
 
 	// Now try to approve with a MUTATED payload in the database
 	// This simulates an attacker who modified the payload after review creation
-	// We'll directly update the payload in the database
-	_, err = dbPool.Exec(ctx, `
-		UPDATE public.review_requests
-		SET payload = '{"action":"tool:execute","tool":"file_write","args":{"path":"/etc/passwd"}}'
-		WHERE id = $1 AND tenant_id = $2
-	`, createdReview.ID, tenantID)
+	// We'll directly update the payload in the database using WithTenantTx for RLS compliance
+	err = pgadapter.WithTenantTx(ctx, dbPool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE public.review_requests
+			SET payload = '{"action":"tool:execute","tool":"file_write","args":{"path":"/etc/passwd"}}'
+			WHERE id = $1 AND tenant_id = $2
+		`, createdReview.ID, tenantID)
+		return err
+	})
 	require.NoError(t, err)
 
 	// Now try to approve - re-validation should detect the mismatch
 	// The usecase re-validates by parsing the payload and checking the action field
+	// Note: ApproveInput requires TenantID from auth context
 	_, err = hitlUC.Approve(ctx, hitl.ApproveInput{
 		Token:     opaqueToken,
 		DecidedBy: userID,
+		TenantID:  tenantID,
 	})
 
 	// The re-validation checks that the action in payload matches review.Action
 	// Since we only changed the args, not the action, this might pass
 	// Let's also test with a different action
-	_, err = dbPool.Exec(ctx, `
-		UPDATE public.review_requests
-		SET payload = '{"action":"model:call","model":"gpt-4"}'
-		WHERE id = $1 AND tenant_id = $2
-	`, createdReview.ID, tenantID)
+	err = pgadapter.WithTenantTx(ctx, dbPool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE public.review_requests
+			SET payload = '{"action":"model:call","model":"gpt-4"}'
+			WHERE id = $1 AND tenant_id = $2
+		`, createdReview.ID, tenantID)
+		return err
+	})
 	require.NoError(t, err)
 
-_, err = hitlUC.Approve(ctx, hitl.ApproveInput{
+	_, err = hitlUC.Approve(ctx, hitl.ApproveInput{
 		Token:     opaqueToken,
 		DecidedBy: userID,
+		TenantID:  tenantID,
 	})
 
 	// Should fail because action in payload (model:call) != review.Action (tool:execute)

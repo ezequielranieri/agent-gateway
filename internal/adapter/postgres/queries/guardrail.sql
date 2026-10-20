@@ -3,6 +3,11 @@ INSERT INTO public.guardrail_violations (tenant_id, request_id, direction, rule_
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, tenant_id, request_id, direction, rule_id, severity, payload_excerpt, metadata, created_at;
 
+-- name: GetGuardrailViolationByID :one
+SELECT id, tenant_id, request_id, direction, rule_id, severity, payload_excerpt, metadata, created_at
+FROM public.guardrail_violations
+WHERE tenant_id = $1 AND id = $2;
+
 -- name: ListGuardrailViolations :many
 SELECT id, tenant_id, request_id, direction, rule_id, severity, payload_excerpt, metadata, created_at
 FROM public.guardrail_violations

@@ -7,10 +7,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -46,7 +48,8 @@ func (r *ReviewRepository) Create(ctx context.Context, req *domain.ReviewRequest
 	tokenHash := hashToken(token) // []byte (32 bytes)
 
 	var created *domain.ReviewRequest
-	err := WithTenant(ctx, r.pool, req.TenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, req.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.CreateReviewRequestParams{
 			TenantID:    uuid.UUID(req.TenantID),
 			RequesterID: uuid.UUID(req.RequesterID),
@@ -57,7 +60,7 @@ func (r *ReviewRepository) Create(ctx context.Context, req *domain.ReviewRequest
 			ExpiresAt:   req.ExpiresAt,
 		}
 
-		sqlcReview, err := r.queries.CreateReviewRequest(ctx, params)
+		sqlcReview, err := q.CreateReviewRequest(ctx, params)
 		if err != nil {
 			return fmt.Errorf("failed to create review request: %w", err)
 		}
@@ -86,13 +89,14 @@ func generateOpaqueToken() string {
 // GetByID retrieves a review request by ID within the tenant context
 func (r *ReviewRepository) GetByID(ctx context.Context, tenantID domain.UUID, id domain.UUID) (*domain.ReviewRequest, error) {
 	var review *domain.ReviewRequest
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		sqlcReview, err := r.queries.GetReviewRequestByID(ctx, postgressqlc.GetReviewRequestByIDParams{
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+		sqlcReview, err := q.GetReviewRequestByID(ctx, postgressqlc.GetReviewRequestByIDParams{
 			TenantID: uuid.UUID(tenantID),
 			ID:       uuid.UUID(id),
 		})
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return domain.ErrNotFound
 			}
 			return fmt.Errorf("failed to get review request: %w", err)
@@ -103,59 +107,32 @@ func (r *ReviewRepository) GetByID(ctx context.Context, tenantID domain.UUID, id
 	return review, err
 }
 
-// GetByTokenHash retrieves a review request by token hash (cross-tenant lookup for approve/reject)
-func (r *ReviewRepository) GetByTokenHash(ctx context.Context, tokenHash []byte) (*domain.ReviewRequest, error) {
-	// We need to search across all tenants for the token hash
-	// This is used for approve/reject where the token is presented without tenant context
-	var review domain.ReviewRequest
-	var tokenHashBytes []byte
-	var decidedAt sql.NullTime
-	var decidedBy sql.NullString
-	var decisionReason sql.NullString
-	err := r.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, requester_id, reviewer_id, action, payload, status, token_hash, expires_at, decided_at, decided_by, decision_reason, created_at, updated_at
-		FROM public.review_requests
-		WHERE token_hash = $1
-		LIMIT 1
-	`, tokenHash).Scan(
-		&review.ID,
-		&review.TenantID,
-		&review.RequesterID,
-		&review.ReviewerID,
-		&review.Action,
-		&review.Payload,
-		&review.Status,
-		&tokenHashBytes,
-		&review.ExpiresAt,
-		&decidedAt,
-		&decidedBy,
-		&decisionReason,
-		&review.CreatedAt,
-		&review.UpdatedAt,
-	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, domain.ErrNotFound
+// GetByTokenHashWithTenant retrieves a review request by token hash within a specific tenant.
+// Runs inside WithTenantTx so RLS is enforced. Returns ErrNotFound if not found in that tenant.
+func (r *ReviewRepository) GetByTokenHashWithTenant(ctx context.Context, tenantID domain.UUID, tokenHash []byte) (*domain.ReviewRequest, error) {
+	var review *domain.ReviewRequest
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+		sqlcReview, err := q.GetReviewRequestByTokenHashWithTenant(ctx, postgressqlc.GetReviewRequestByTokenHashWithTenantParams{
+			TenantID:  uuid.UUID(tenantID),
+			TokenHash: tokenHash,
+		})
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return domain.ErrNotFound
+			}
+			return fmt.Errorf("failed to get review request by token hash: %w", err)
 		}
-		return nil, fmt.Errorf("failed to get review request by token hash: %w", err)
-	}
-	// token_hash is already stored as raw bytes, convert to hex for domain model
-	review.TokenHash = hex.EncodeToString(tokenHashBytes)
-	if review.DecidedAt != nil {
-		// DecidedAt is already set by the scan
-	}
-	if review.DecidedBy != nil {
-		// DecidedBy is already set by the scan
-	}
-	if review.DecisionReason != "" {
-		// DecisionReason is already set by the scan
-	}
-	return &review, nil
+		review = convertSQLCReviewRequest(sqlcReview)
+		return nil
+	})
+	return review, err
 }
 
 // UpdateStatus atomically updates the review status with row lock
 func (r *ReviewRepository) UpdateStatus(ctx context.Context, tenantID domain.UUID, id domain.UUID, status domain.ReviewStatus, decidedBy *domain.UUID) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		var err error
 		switch status {
 		case domain.ReviewStatusApproved:
@@ -165,7 +142,7 @@ func (r *ReviewRepository) UpdateStatus(ctx context.Context, tenantID domain.UUI
 				DecidedBy:      pgtype.UUID{Bytes: uuid.UUID(*decidedBy), Valid: decidedBy != nil},
 				DecisionReason: pgtype.Text{}, // Could add reason if needed
 			}
-			_, err = r.queries.ApproveReviewRequest(ctx, params)
+			_, err = q.ApproveReviewRequest(ctx, params)
 		case domain.ReviewStatusRejected:
 			params := postgressqlc.RejectReviewRequestParams{
 				TenantID:       uuid.UUID(tenantID),
@@ -173,17 +150,17 @@ func (r *ReviewRepository) UpdateStatus(ctx context.Context, tenantID domain.UUI
 				DecidedBy:      pgtype.UUID{Bytes: uuid.UUID(*decidedBy), Valid: decidedBy != nil},
 				DecisionReason: pgtype.Text{},
 			}
-			_, err = r.queries.RejectReviewRequest(ctx, params)
+			_, err = q.RejectReviewRequest(ctx, params)
 		default:
 			// For EXPIRED, we use the sweep function or direct update
-			_, err = r.pool.Exec(ctx, `
+			_, err = tx.Exec(ctx, `
 				UPDATE public.review_requests
 				SET status = $3, updated_at = now()
 				WHERE tenant_id = $1 AND id = $2 AND status = 'PENDING'
 			`, uuid.UUID(tenantID), uuid.UUID(id), string(status))
 		}
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return domain.ErrReviewNotPending
 			}
 			return fmt.Errorf("failed to update review status: %w", err)
@@ -194,8 +171,8 @@ func (r *ReviewRepository) UpdateStatus(ctx context.Context, tenantID domain.UUI
 
 // MarkExecuted marks a review request as executed (only from APPROVED state)
 func (r *ReviewRepository) MarkExecuted(ctx context.Context, tenantID domain.UUID, id domain.UUID) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		result, err := r.pool.Exec(ctx, `
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		result, err := tx.Exec(ctx, `
 			UPDATE public.review_requests
 			SET status = 'EXECUTED', updated_at = now()
 			WHERE tenant_id = $1 AND id = $2 AND status = 'APPROVED'
@@ -210,52 +187,63 @@ func (r *ReviewRepository) MarkExecuted(ctx context.Context, tenantID domain.UUI
 	})
 }
 
-// ExpirePending sweeps expired pending reviews to EXPIRED status
-// Returns the number of reviews expired
+// ExpirePending sweeps expired pending reviews to EXPIRED status across all tenants.
+// Reads tenant IDs from the global tenants table and sweeps each tenant within its own transaction.
+// If a tenant fails, the error is recorded and sweeping continues for remaining tenants.
+// Returns the total count of expired reviews and an aggregated error if any tenant failed.
 func (r *ReviewRepository) ExpirePending(ctx context.Context) (int64, error) {
 	var totalExpired int64
-	
-	// Get all tenant IDs that have pending reviews
-	rows, err := r.pool.Query(ctx, `
-		SELECT DISTINCT tenant_id FROM public.review_requests WHERE status = 'PENDING'
-	`)
+	var errs []error
+
+	// Read all active tenant IDs from the global tenants table (no RLS)
+	rows, err := r.pool.Query(ctx, `SELECT id FROM public.tenants WHERE status = 'active'`)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get tenants with pending reviews: %w", err)
+		return 0, fmt.Errorf("failed to get active tenants: %w", err)
 	}
 	defer rows.Close()
 
+	var tenantIDs []uuid.UUID
 	for rows.Next() {
 		var tenantID uuid.UUID
 		if err := rows.Scan(&tenantID); err != nil {
 			return totalExpired, err
 		}
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return totalExpired, err
+	}
 
-		err := WithTenant(ctx, r.pool, domain.UUID(tenantID), func(ctx context.Context) error {
-			err := r.queries.SweepExpiredReviews(ctx, tenantID)
+	// Sweep each tenant within its own WithTenantTx transaction
+	for _, tenantID := range tenantIDs {
+		var rowsAffected int64
+		err := WithTenantTx(ctx, r.pool, domain.UUID(tenantID), func(ctx context.Context, tx pgx.Tx) error {
+			q := r.queries.WithTx(tx)
+			// Use SweepExpiredReviewsCount which returns the number of affected rows
+			count, err := q.SweepExpiredReviewsCount(ctx, tenantID)
 			if err != nil {
 				return fmt.Errorf("failed to sweep expired reviews for tenant %s: %w", tenantID, err)
 			}
-			// Note: We can't easily get the count from the SQLC function, 
-			// so we'd need to run a separate query or modify the SQL
+			rowsAffected = count
 			return nil
 		})
 		if err != nil {
-			return totalExpired, err
+			errs = append(errs, fmt.Errorf("tenant %s: %w", tenantID, err))
+			continue
 		}
-		
-		// Count expired for this tenant
-		var count int64
-		err = r.pool.QueryRow(ctx, `
-			SELECT COUNT(*) FROM public.review_requests 
-			WHERE tenant_id = $1 AND status = 'EXPIRED' AND updated_at > now() - interval '1 minute'
-		`, tenantID).Scan(&count)
-		if err != nil {
-			return totalExpired, err
-		}
-		totalExpired += count
+		totalExpired += rowsAffected
 	}
 
-	return totalExpired, rows.Err()
+	if len(errs) > 0 {
+		// Aggregate errors
+		errMsgs := make([]string, len(errs))
+		for i, e := range errs {
+			errMsgs[i] = e.Error()
+		}
+		return totalExpired, fmt.Errorf("errors sweeping expired reviews: %v", errMsgs)
+	}
+
+	return totalExpired, nil
 }
 
 // convertSQLCReviewRequest converts a SQLC ReviewRequest to domain ReviewRequest
@@ -287,7 +275,7 @@ func convertSQLCReviewRequest(e postgressqlc.ReviewRequest) *domain.ReviewReques
 		TenantID:       domain.UUID(e.TenantID),
 		RequesterID:    domain.UUID(e.RequesterID),
 		ReviewerID:     reviewerID,
-		TokenHash:      string(e.TokenHash),
+		TokenHash:      hex.EncodeToString(e.TokenHash),
 		Action:         extractActionFromPayload(e.Payload), // Extract action from payload JSON
 		Payload:        string(e.Payload),
 		Status:         domain.ReviewStatus(e.Status),
@@ -312,6 +300,3 @@ func extractActionFromPayload(payload []byte) string {
 	}
 	return "unknown"
 }
-
-// Need to add json import
-// This will be fixed when we add the import above

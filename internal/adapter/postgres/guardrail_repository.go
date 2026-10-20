@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -27,9 +28,10 @@ func NewGuardrailViolationRepository(pool *pgxpool.Pool) *GuardrailViolationRepo
 }
 
 // Create stores a guardrail violation
-// Runs inside WithTenant (tenant-bound transaction)
+// Runs inside WithTenantTx (tenant-bound transaction)
 func (r *GuardrailViolationRepository) Create(ctx context.Context, violation *domain.GuardrailViolation) error {
-	return WithTenant(ctx, r.pool, violation.TenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, violation.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		var requestID pgtype.UUID
 		if violation.RequestID != nil {
 			requestID = pgtype.UUID{Bytes: uuid.UUID(*violation.RequestID), Valid: true}
@@ -51,7 +53,7 @@ func (r *GuardrailViolationRepository) Create(ctx context.Context, violation *do
 			Metadata:       metadata,
 		}
 
-		created, err := r.queries.CreateGuardrailViolation(ctx, params)
+		created, err := q.CreateGuardrailViolation(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -65,18 +67,12 @@ func (r *GuardrailViolationRepository) Create(ctx context.Context, violation *do
 // GetByID retrieves a guardrail violation by ID
 func (r *GuardrailViolationRepository) GetByID(ctx context.Context, tenantID domain.UUID, id domain.UUID) (*domain.GuardrailViolation, error) {
 	var violation *domain.GuardrailViolation
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		row := r.pool.QueryRow(ctx, `
-			SELECT id, tenant_id, request_id, direction, rule_id, severity, payload_excerpt, metadata, created_at
-			FROM public.guardrail_violations
-			WHERE tenant_id = $1 AND id = $2
-		`, tenantID, id)
-
-		var i postgressqlc.GuardrailViolation
-		err := row.Scan(
-			&i.ID, &i.TenantID, &i.RequestID, &i.Direction,
-			&i.RuleID, &i.Severity, &i.PayloadExcerpt, &i.Metadata, &i.CreatedAt,
-		)
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+		result, err := q.GetGuardrailViolationByID(ctx, postgressqlc.GetGuardrailViolationByIDParams{
+			TenantID: uuid.UUID(tenantID),
+			ID:       uuid.UUID(id),
+		})
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return domain.ErrNotFound
@@ -84,7 +80,7 @@ func (r *GuardrailViolationRepository) GetByID(ctx context.Context, tenantID dom
 			return err
 		}
 
-		violation = convertSQLCGuardrailViolation(i)
+		violation = convertSQLCGuardrailViolation(result)
 		return nil
 	})
 	return violation, err
@@ -93,7 +89,8 @@ func (r *GuardrailViolationRepository) GetByID(ctx context.Context, tenantID dom
 // List retrieves guardrail violations with filters
 func (r *GuardrailViolationRepository) List(ctx context.Context, filter GuardrailViolationFilter) ([]*domain.GuardrailViolation, error) {
 	var violations []*domain.GuardrailViolation
-	err := WithTenant(ctx, r.pool, filter.TenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, filter.TenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.ListGuardrailViolationsParams{
 			TenantID: uuid.UUID(filter.TenantID),
 			Column2:  filter.Direction,
@@ -108,7 +105,7 @@ func (r *GuardrailViolationRepository) List(ctx context.Context, filter Guardrai
 			params.Column5 = uuid.UUID(*filter.RequestID)
 		}
 
-		rows, err := r.queries.ListGuardrailViolations(ctx, params)
+		rows, err := q.ListGuardrailViolations(ctx, params)
 		if err != nil {
 			return err
 		}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	postgressqlc "github.com/ezequielranieri/agent-gateway/internal/adapter/postgres/sqlc"
@@ -27,13 +28,14 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 
 // Create creates a new user
 func (r *UserRepository) Create(ctx context.Context, tenantID domain.UUID, user *domain.User) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.CreateUserParams{
 			TenantID:      uuid.UUID(tenantID),
 			Email:         user.Email,
 			PasswordHash:  user.PasswordHash,
 		}
-		result, err := r.queries.CreateUser(ctx, params)
+		result, err := q.CreateUser(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -48,12 +50,13 @@ func (r *UserRepository) Create(ctx context.Context, tenantID domain.UUID, user 
 // GetByEmail retrieves a user by email within a tenant
 func (r *UserRepository) GetByEmail(ctx context.Context, tenantID domain.UUID, email string) (*domain.User, error) {
 	var user *domain.User
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.GetUserByEmailParams{
 			TenantID: uuid.UUID(tenantID),
 			Email:    email,
 		}
-		result, err := r.queries.GetUserByEmail(ctx, params)
+		result, err := q.GetUserByEmail(ctx, params)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return domain.ErrNotFound
@@ -77,12 +80,13 @@ func (r *UserRepository) GetByEmail(ctx context.Context, tenantID domain.UUID, e
 // GetByID retrieves a user by ID within a tenant
 func (r *UserRepository) GetByID(ctx context.Context, tenantID domain.UUID, id domain.UUID) (*domain.User, error) {
 	var user *domain.User
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.GetUserByIDParams{
 			TenantID: uuid.UUID(tenantID),
 			ID:       uuid.UUID(id),
 		}
-		result, err := r.queries.GetUserByID(ctx, params)
+		result, err := q.GetUserByID(ctx, params)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return domain.ErrNotFound
@@ -105,7 +109,8 @@ func (r *UserRepository) GetByID(ctx context.Context, tenantID domain.UUID, id d
 
 // Update updates a user
 func (r *UserRepository) Update(ctx context.Context, tenantID domain.UUID, user *domain.User) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.UpdateUserParams{
 			TenantID:      uuid.UUID(tenantID),
 			ID:            uuid.UUID(user.ID),
@@ -113,7 +118,7 @@ func (r *UserRepository) Update(ctx context.Context, tenantID domain.UUID, user 
 			PasswordHash:  user.PasswordHash,
 			Status:        string(user.Status),
 		}
-		result, err := r.queries.UpdateUser(ctx, params)
+		result, err := q.UpdateUser(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -125,12 +130,13 @@ func (r *UserRepository) Update(ctx context.Context, tenantID domain.UUID, user 
 // ListSessions lists active sessions (refresh tokens) for a user
 func (r *UserRepository) ListSessions(ctx context.Context, tenantID domain.UUID, userID domain.UUID) ([]domain.Session, error) {
 	var sessions []domain.Session
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.ListUserSessionsParams{
 			UserID:   uuid.UUID(userID),
 			TenantID: uuid.UUID(tenantID),
 		}
-		results, err := r.queries.ListUserSessions(ctx, params)
+		results, err := q.ListUserSessions(ctx, params)
 		if err != nil {
 			return err
 		}
@@ -158,12 +164,13 @@ func (r *UserRepository) ListSessions(ctx context.Context, tenantID domain.UUID,
 
 // RevokeAllSessions revokes all sessions for a user
 func (r *UserRepository) RevokeAllSessions(ctx context.Context, tenantID domain.UUID, userID domain.UUID) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 		params := postgressqlc.RevokeAllUserSessionsParams{
 			UserID:   uuid.UUID(userID),
 			TenantID: uuid.UUID(tenantID),
 		}
-		return r.queries.RevokeAllUserSessions(ctx, params)
+		return q.RevokeAllUserSessions(ctx, params)
 	})
 }
 

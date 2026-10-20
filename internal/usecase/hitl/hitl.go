@@ -92,8 +92,8 @@ func (uc *HITLUseCase) CreateReview(ctx context.Context, input CreateReviewInput
 	}
 
 	// Create in repository (generates token and stores hash)
-	// Use background context for repository operations to avoid request deadline issues
-	createdReview, token, err := uc.reviewRepo.Create(context.Background(), review)
+	// Use request context for creation (read+write); if client disconnects, creation is idempotent-safe
+	createdReview, token, err := uc.reviewRepo.Create(ctx, review)
 	if err != nil {
 		uc.logger.Error().Err(err).Msg("Failed to create review request")
 		return nil, fmt.Errorf("failed to create review: %w", err)
@@ -110,8 +110,8 @@ func (uc *HITLUseCase) CreateReview(ctx context.Context, input CreateReviewInput
 		Payload:     json.RawMessage(fmt.Sprintf(`{"review_id":"%s","action":"%s"}`, createdReview.ID, input.Action)),
 		CreatedAt:   time.Now(),
 	}
-	// Use background context for audit append (fail-open)
-	if err := uc.auditRepo.Append(context.Background(), auditEvent); err != nil {
+	// Use background context for audit append (fail-open) - must complete even if client disconnects
+	if err := uc.auditRepo.Append(context.WithoutCancel(ctx), auditEvent); err != nil {
 		uc.logger.Error().Err(err).Msg("Failed to emit review.created audit event (fail-open)")
 		// Fail-open: don't fail the request if audit fails
 	}
@@ -148,6 +148,7 @@ type ApproveInput struct {
 	Token        string       // Opaque token from creation
 	DecidedBy    domain.UUID  // User ID of the approver
 	DecisionReason string     // Optional reason
+	TenantID     domain.UUID  // Tenant ID of the approver (from auth context)
 }
 
 // ApproveOutput represents output from approving a review request
@@ -156,33 +157,36 @@ type ApproveOutput struct {
 }
 
 // Approve approves a pending review request with full re-validation
+// The tenantID is taken from the auth context (reviewer's tenant).
+// The review is looked up within that tenant using the token hash.
+// If no tenant in context (SuperAdmin) or not found in that tenant, returns ErrInvalidToken.
 func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*ApproveOutput, error) {
 	uc.logger.Debug().Msg("Approving review request")
+
+	// Require tenant from auth context
+	if input.TenantID.IsZero() {
+		uc.logger.Debug().Msg("No tenant in auth context (SuperAdmin) - cannot approve")
+		return nil, domain.ErrInvalidToken
+	}
 
 	// Hash the presented token for lookup
 	tokenHash := hashToken(input.Token)
 
-	// Look up review by token hash (cross-tenant)
-	// Use background context for database operations to avoid request deadline issues
-	review, err := uc.reviewRepo.GetByTokenHash(context.Background(), tokenHash)
+	// Look up review by token hash WITHIN the reviewer's tenant
+	// This ensures RLS is enforced and no cross-tenant lookup occurs
+	// Use request context for read (lookup); writes use WithoutCancel below
+	review, err := uc.reviewRepo.GetByTokenHashWithTenant(ctx, input.TenantID, tokenHash)
 	if err != nil {
 		if err == domain.ErrNotFound {
-			uc.logger.Debug().Msg("Review not found for token")
+			uc.logger.Debug().Msg("Review not found for token in tenant")
 			return nil, domain.ErrInvalidToken
 		}
 		return nil, fmt.Errorf("failed to get review: %w", err)
 	}
 
-	// Timing-safe comparison of token hash
-	// review.TokenHash is hex string, tokenHash is raw bytes - decode hex for comparison
-	storedHashBytes, err := hex.DecodeString(review.TokenHash)
-	if err != nil {
-		uc.logger.Error().Err(err).Msg("Failed to decode stored token hash")
-		return nil, domain.ErrInvalidToken
-	}
-	presentedHash := tokenHash
-	if subtle.ConstantTimeCompare(storedHashBytes, presentedHash) != 1 {
-		uc.logger.Debug().Msg("Token hash mismatch (timing-safe compare)")
+	// Verify token hash using shared function (timing-safe, hex decode)
+	if err := verifyTokenHash(review.TokenHash, input.Token); err != nil {
+		uc.logger.Debug().Err(err).Msg("Token hash verification failed")
 		return nil, domain.ErrInvalidToken
 	}
 
@@ -204,14 +208,14 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 	if err := decoder.Decode(&payloadMap); err != nil {
 		uc.logger.Error().Err(err).Msg("Re-validation failed: invalid payload JSON")
 		// Reject the review due to invalid payload
-		_ = uc.rejectWithReason(context.Background(), review, input.DecidedBy, "re-validation failed: invalid payload")
+		_ = uc.rejectWithReason(context.WithoutCancel(ctx), review, input.DecidedBy, "re-validation failed: invalid payload")
 		return nil, domain.ErrValidation
 	}
 
 	// 2. Verify review action is valid (non-empty)
 	if review.Action == "" {
 		uc.logger.Error().Msg("Re-validation failed: review action is empty")
-		_ = uc.rejectWithReason(context.Background(), review, input.DecidedBy, "re-validation failed: action is empty")
+		_ = uc.rejectWithReason(context.WithoutCancel(ctx), review, input.DecidedBy, "re-validation failed: action is empty")
 		return nil, domain.ErrValidation
 	}
 
@@ -220,15 +224,16 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 	// (e.g., tool IDs, model IDs) exist and are accessible within the tenant
 	// For now, we'll do a basic check - in a full implementation this would
 	// call out to the relevant repositories
-	if err := uc.revalidateResourceIDs(context.Background(), review.TenantID, payloadMap); err != nil {
+	if err := uc.revalidateResourceIDs(ctx, review.TenantID, payloadMap); err != nil {
 		uc.logger.Error().Err(err).Msg("Re-validation failed: resource ID check")
-		_ = uc.rejectWithReason(context.Background(), review, input.DecidedBy, "re-validation failed: "+err.Error())
+		_ = uc.rejectWithReason(context.WithoutCancel(ctx), review, input.DecidedBy, "re-validation failed: "+err.Error())
 		return nil, domain.ErrValidation
 	}
 
 	// Atomic state transition: PENDING -> APPROVED
 	// The UPDATE ... WHERE status='PENDING' AND token_hash=$1 ensures only one approve succeeds
-	err = uc.reviewRepo.UpdateStatus(context.Background(), review.TenantID, review.ID, domain.ReviewStatusApproved, &input.DecidedBy)
+	// Write that must complete: use WithoutCancel to survive client disconnect
+	err = uc.reviewRepo.UpdateStatus(context.WithoutCancel(ctx), review.TenantID, review.ID, domain.ReviewStatusApproved, &input.DecidedBy)
 	if err != nil {
 		if err == domain.ErrReviewNotPending {
 			uc.logger.Debug().Msg("Concurrent approve detected - review no longer pending")
@@ -237,14 +242,14 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 		return nil, fmt.Errorf("failed to approve review: %w", err)
 	}
 
-	// Refresh review to get updated status
+	// Refresh review to get updated status (read - use request context)
 	var approvedReview *domain.ReviewRequest
-	approvedReview, err = uc.reviewRepo.GetByID(context.Background(), review.TenantID, review.ID)
+	approvedReview, err = uc.reviewRepo.GetByID(ctx, review.TenantID, review.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get approved review: %w", err)
 	}
 
-	// Emit audit event for review approval (fail-open)
+	// Emit audit event for review approval (fail-open) - must complete even if client disconnects
 	auditEvent := &domain.AuditEvent{
 		TenantID:    review.TenantID,
 		ActorUserID: &input.DecidedBy,
@@ -255,7 +260,7 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 		Payload:     json.RawMessage(fmt.Sprintf(`{"review_id":"%s","action":"%s","decision_reason":"%s"}`, review.ID, review.Action, input.DecisionReason)),
 		CreatedAt:   time.Now(),
 	}
-	if err := uc.auditRepo.Append(context.Background(), auditEvent); err != nil {
+	if err := uc.auditRepo.Append(context.WithoutCancel(ctx), auditEvent); err != nil {
 		uc.logger.Error().Err(err).Msg("Failed to emit review.approved audit event (fail-open)")
 	}
 
@@ -272,18 +277,28 @@ type RejectInput struct {
 	Token          string       // Opaque token from creation
 	DecidedBy      domain.UUID  // User ID of the rejector
 	DecisionReason string       // Optional reason
+	TenantID       domain.UUID  // Tenant ID of the rejector (from auth context)
 }
 
 // Reject rejects a pending review request
+// The tenantID is taken from the auth context (rejector's tenant).
+// The review is looked up within that tenant using the token hash.
+// If no tenant in context (SuperAdmin) or not found in that tenant, returns ErrInvalidToken.
 func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.ReviewRequest, error) {
 	uc.logger.Debug().Msg("Rejecting review request")
+
+	// Require tenant from auth context
+	if input.TenantID.IsZero() {
+		uc.logger.Debug().Msg("No tenant in auth context (SuperAdmin) - cannot reject")
+		return nil, domain.ErrInvalidToken
+	}
 
 	// Hash the presented token for lookup
 	tokenHash := hashToken(input.Token)
 
-	// Look up review by token hash
-	// Use background context for database operations to avoid request deadline issues
-	review, err := uc.reviewRepo.GetByTokenHash(context.Background(), tokenHash)
+	// Look up review by token hash WITHIN the rejector's tenant
+	// Use request context for read (lookup); writes use WithoutCancel below
+	review, err := uc.reviewRepo.GetByTokenHashWithTenant(ctx, input.TenantID, tokenHash)
 	if err != nil {
 		if err == domain.ErrNotFound {
 			return nil, domain.ErrInvalidToken
@@ -291,11 +306,9 @@ func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.R
 		return nil, fmt.Errorf("failed to get review: %w", err)
 	}
 
-	// Timing-safe comparison
-	storedHash := []byte(review.TokenHash)
-	presentedHash := []byte(tokenHash)
-	if subtle.ConstantTimeCompare(storedHash, presentedHash) != 1 {
-		uc.logger.Debug().Msg("Token hash mismatch (timing-safe compare)")
+	// Verify token hash using shared function (timing-safe, hex decode)
+	if err := verifyTokenHash(review.TokenHash, input.Token); err != nil {
+		uc.logger.Debug().Err(err).Msg("Token hash verification failed")
 		return nil, domain.ErrInvalidToken
 	}
 
@@ -308,7 +321,8 @@ func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.R
 	}
 
 	// Atomic state transition: PENDING -> REJECTED
-	err = uc.reviewRepo.UpdateStatus(context.Background(), review.TenantID, review.ID, domain.ReviewStatusRejected, &input.DecidedBy)
+	// Write that must complete: use WithoutCancel to survive client disconnect
+	err = uc.reviewRepo.UpdateStatus(context.WithoutCancel(ctx), review.TenantID, review.ID, domain.ReviewStatusRejected, &input.DecidedBy)
 	if err != nil {
 		if err == domain.ErrReviewNotPending {
 			return nil, domain.ErrReviewNotPending
@@ -316,14 +330,14 @@ func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.R
 		return nil, fmt.Errorf("failed to reject review: %w", err)
 	}
 
-	// Refresh review
+	// Refresh review (read - use request context)
 	var rejectedReview *domain.ReviewRequest
-	rejectedReview, err = uc.reviewRepo.GetByID(context.Background(), review.TenantID, review.ID)
+	rejectedReview, err = uc.reviewRepo.GetByID(ctx, review.TenantID, review.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rejected review: %w", err)
 	}
 
-	// Emit audit event for review rejection (fail-open)
+	// Emit audit event for review rejection (fail-open) - must complete even if client disconnects
 	auditEvent := &domain.AuditEvent{
 		TenantID:    review.TenantID,
 		ActorUserID: &input.DecidedBy,
@@ -334,7 +348,7 @@ func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.R
 		Payload:     json.RawMessage(fmt.Sprintf(`{"review_id":"%s","action":"%s","decision_reason":"%s"}`, review.ID, review.Action, input.DecisionReason)),
 		CreatedAt:   time.Now(),
 	}
-	if err := uc.auditRepo.Append(context.Background(), auditEvent); err != nil {
+	if err := uc.auditRepo.Append(context.WithoutCancel(ctx), auditEvent); err != nil {
 		uc.logger.Error().Err(err).Msg("Failed to emit review.rejected audit event (fail-open)")
 	}
 
@@ -359,9 +373,8 @@ func (uc *HITLUseCase) Execute(ctx context.Context, input ExecuteInput) (*domain
 		Str("review_id", input.ReviewID.String()).
 		Msg("Marking review as executed")
 
-	// Get review within tenant context
-	// Use background context for database operations to avoid request deadline issues
-	review, err := uc.reviewRepo.GetByID(context.Background(), input.TenantID, input.ReviewID)
+	// Get review within tenant context (read - use request context)
+	review, err := uc.reviewRepo.GetByID(ctx, input.TenantID, input.ReviewID)
 	if err != nil {
 		return nil, err
 	}
@@ -371,20 +384,20 @@ func (uc *HITLUseCase) Execute(ctx context.Context, input ExecuteInput) (*domain
 		return nil, domain.ErrReviewNotPending // Or a more specific error
 	}
 
-	// Mark as executed
-	err = uc.reviewRepo.MarkExecuted(context.Background(), input.TenantID, input.ReviewID)
+	// Mark as executed - write that must complete: use WithoutCancel to survive client disconnect
+	err = uc.reviewRepo.MarkExecuted(context.WithoutCancel(ctx), input.TenantID, input.ReviewID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mark review executed: %w", err)
 	}
 
-	// Refresh review
+	// Refresh review (read - use request context)
 	var executedReview *domain.ReviewRequest
-	executedReview, err = uc.reviewRepo.GetByID(context.Background(), input.TenantID, input.ReviewID)
+	executedReview, err = uc.reviewRepo.GetByID(ctx, input.TenantID, input.ReviewID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get executed review: %w", err)
 	}
 
-	// Emit audit event for review execution (fail-open)
+	// Emit audit event for review execution (fail-open) - must complete even if client disconnects
 	auditEvent := &domain.AuditEvent{
 		TenantID:    input.TenantID,
 		ActorUserID: &input.ActorID,
@@ -395,7 +408,7 @@ func (uc *HITLUseCase) Execute(ctx context.Context, input ExecuteInput) (*domain
 		Payload:     json.RawMessage(fmt.Sprintf(`{"review_id":"%s","action":"%s"}`, input.ReviewID, review.Action)),
 		CreatedAt:   time.Now(),
 	}
-	if err := uc.auditRepo.Append(context.Background(), auditEvent); err != nil {
+	if err := uc.auditRepo.Append(context.WithoutCancel(ctx), auditEvent); err != nil {
 		uc.logger.Error().Err(err).Msg("Failed to emit review.executed audit event (fail-open)")
 	}
 
@@ -448,6 +461,21 @@ func (uc *HITLUseCase) revalidateResourceIDs(ctx context.Context, tenantID domai
 	
 	// For now, just log and return nil (passes re-validation)
 	uc.logger.Debug().Interface("payload", payload).Msg("Re-validating resource IDs")
+	return nil
+}
+
+// verifyTokenHash verifies that the presented token matches the stored hash using timing-safe comparison.
+// The stored hash is a hex-encoded string; the presented token is hashed to raw bytes.
+// Returns nil if valid, domain.ErrInvalidToken if mismatch or decode error.
+func verifyTokenHash(storedHashHex string, presentedToken string) error {
+	storedHashBytes, err := hex.DecodeString(storedHashHex)
+	if err != nil {
+		return domain.ErrInvalidToken
+	}
+	presentedHash := hashToken(presentedToken)
+	if subtle.ConstantTimeCompare(storedHashBytes, presentedHash) != 1 {
+		return domain.ErrInvalidToken
+	}
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -15,7 +16,7 @@ import (
 )
 
 // DelegationRepository handles persistence of delegation grants.
-// All operations run inside WithTenant for RLS tenant binding.
+// All operations run inside WithTenantTx for RLS tenant binding.
 type DelegationRepository struct {
 	pool *pgxpool.Pool
 }
@@ -103,12 +104,12 @@ func rowToGrant(row delegationGrantRow) *delegation.Grant {
 }
 
 // Create inserts a new delegation grant.
-// Runs inside WithTenant (tenant-bound transaction).
+// Runs inside WithTenantTx (tenant-bound transaction).
 func (r *DelegationRepository) Create(ctx context.Context, grant *delegation.Grant) error {
-	return WithTenant(ctx, r.pool, grant.TenantID, func(ctx context.Context) error {
+	return WithTenantTx(ctx, r.pool, grant.TenantID, func(ctx context.Context, tx pgx.Tx) error {
 		params := grantToInsertParams(grant)
 
-		_, err := r.pool.Exec(ctx, `
+		_, err := tx.Exec(ctx, `
 			INSERT INTO public.delegation_grants
 				(id, parent_grant_id, chain_id, tenant_id, delegate_identity,
 				 granted_scope, root_intent, hitl_classification,
@@ -130,8 +131,8 @@ func (r *DelegationRepository) Create(ctx context.Context, grant *delegation.Gra
 // GetByID retrieves a delegation grant by ID within a tenant.
 func (r *DelegationRepository) GetByID(ctx context.Context, tenantID domain.UUID, grantID domain.UUID) (*delegation.Grant, error) {
 	var result *delegation.Grant
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		row := r.pool.QueryRow(ctx, `
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, `
 			SELECT id, parent_grant_id, chain_id, tenant_id, delegate_identity,
 				   granted_scope, root_intent, hitl_classification,
 				   depth, generation, expires_at, budget_remaining, status, created_at
@@ -161,8 +162,8 @@ func (r *DelegationRepository) GetByID(ctx context.Context, tenantID domain.UUID
 
 // UpdateStatus updates a delegation grant's status.
 func (r *DelegationRepository) UpdateStatus(ctx context.Context, tenantID domain.UUID, grantID domain.UUID, status delegation.GrantStatus) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		tag, err := r.pool.Exec(ctx, `
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
 			UPDATE public.delegation_grants
 			SET status = $1
 			WHERE tenant_id = $2 AND id = $3
@@ -180,8 +181,8 @@ func (r *DelegationRepository) UpdateStatus(ctx context.Context, tenantID domain
 // CountActiveChildren counts the number of active children for a parent grant.
 func (r *DelegationRepository) CountActiveChildren(ctx context.Context, tenantID domain.UUID, parentGrantID domain.UUID) (int, error) {
 	var count int
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		row := r.pool.QueryRow(ctx, `
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, `
 			SELECT COUNT(*)
 			FROM public.delegation_grants
 			WHERE tenant_id = $1 AND parent_grant_id = $2 AND status = 'active'
@@ -197,8 +198,8 @@ func (r *DelegationRepository) CountActiveChildren(ctx context.Context, tenantID
 // at a lower generation at the next authorization boundary.
 func (r *DelegationRepository) GetChainGeneration(ctx context.Context, tenantID domain.UUID, chainID domain.UUID) (int, error) {
 	var generation int
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		row := r.pool.QueryRow(ctx, `
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, `
 			SELECT COUNT(*)
 			FROM public.delegation_grants
 			WHERE tenant_id = $1 AND chain_id = $2 AND status = 'revoked'
@@ -211,8 +212,8 @@ func (r *DelegationRepository) GetChainGeneration(ctx context.Context, tenantID 
 // ListByChain retrieves all grants in a delegation chain.
 func (r *DelegationRepository) ListByChain(ctx context.Context, tenantID domain.UUID, chainID domain.UUID) ([]*delegation.Grant, error) {
 	var grants []*delegation.Grant
-	err := WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		rows, err := r.pool.Query(ctx, `
+	err := WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
 			SELECT id, parent_grant_id, chain_id, tenant_id, delegate_identity,
 				   granted_scope, root_intent, hitl_classification,
 				   depth, generation, expires_at, budget_remaining, status, created_at
@@ -246,8 +247,8 @@ func (r *DelegationRepository) ListByChain(ctx context.Context, tenantID domain.
 // This increments the chain generation, invalidating all existing grants
 // at the next authorization boundary.
 func (r *DelegationRepository) RevokeByChain(ctx context.Context, tenantID domain.UUID, chainID domain.UUID) error {
-	return WithTenant(ctx, r.pool, tenantID, func(ctx context.Context) error {
-		_, err := r.pool.Exec(ctx, `
+	return WithTenantTx(ctx, r.pool, tenantID, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
 			UPDATE public.delegation_grants
 			SET status = 'revoked'
 			WHERE tenant_id = $1 AND chain_id = $2 AND status = 'active'
