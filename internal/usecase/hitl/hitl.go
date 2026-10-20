@@ -184,16 +184,9 @@ func (uc *HITLUseCase) Approve(ctx context.Context, input ApproveInput) (*Approv
 		return nil, fmt.Errorf("failed to get review: %w", err)
 	}
 
-	// Timing-safe comparison of token hash
-	// review.TokenHash is hex string, tokenHash is raw bytes - decode hex for comparison
-	storedHashBytes, err := hex.DecodeString(review.TokenHash)
-	if err != nil {
-		uc.logger.Error().Err(err).Msg("Failed to decode stored token hash")
-		return nil, domain.ErrInvalidToken
-	}
-	presentedHash := tokenHash
-	if subtle.ConstantTimeCompare(storedHashBytes, presentedHash) != 1 {
-		uc.logger.Debug().Msg("Token hash mismatch (timing-safe compare)")
+	// Verify token hash using shared function (timing-safe, hex decode)
+	if err := verifyTokenHash(review.TokenHash, input.Token); err != nil {
+		uc.logger.Debug().Err(err).Msg("Token hash verification failed")
 		return nil, domain.ErrInvalidToken
 	}
 
@@ -312,11 +305,9 @@ func (uc *HITLUseCase) Reject(ctx context.Context, input RejectInput) (*domain.R
 		return nil, fmt.Errorf("failed to get review: %w", err)
 	}
 
-	// Timing-safe comparison
-	storedHash := []byte(review.TokenHash)
-	presentedHash := []byte(tokenHash)
-	if subtle.ConstantTimeCompare(storedHash, presentedHash) != 1 {
-		uc.logger.Debug().Msg("Token hash mismatch (timing-safe compare)")
+	// Verify token hash using shared function (timing-safe, hex decode)
+	if err := verifyTokenHash(review.TokenHash, input.Token); err != nil {
+		uc.logger.Debug().Err(err).Msg("Token hash verification failed")
 		return nil, domain.ErrInvalidToken
 	}
 
@@ -469,6 +460,21 @@ func (uc *HITLUseCase) revalidateResourceIDs(ctx context.Context, tenantID domai
 	
 	// For now, just log and return nil (passes re-validation)
 	uc.logger.Debug().Interface("payload", payload).Msg("Re-validating resource IDs")
+	return nil
+}
+
+// verifyTokenHash verifies that the presented token matches the stored hash using timing-safe comparison.
+// The stored hash is a hex-encoded string; the presented token is hashed to raw bytes.
+// Returns nil if valid, domain.ErrInvalidToken if mismatch or decode error.
+func verifyTokenHash(storedHashHex string, presentedToken string) error {
+	storedHashBytes, err := hex.DecodeString(storedHashHex)
+	if err != nil {
+		return domain.ErrInvalidToken
+	}
+	presentedHash := hashToken(presentedToken)
+	if subtle.ConstantTimeCompare(storedHashBytes, presentedHash) != 1 {
+		return domain.ErrInvalidToken
+	}
 	return nil
 }
 
